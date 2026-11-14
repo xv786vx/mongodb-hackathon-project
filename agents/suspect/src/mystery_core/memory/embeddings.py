@@ -24,7 +24,7 @@ class Embedder(Protocol):
 class VoyageEmbedder:
     BATCH = 128
 
-    def __init__(self, api_key: str, model: str = "voyage-3.5", dims: int = 1024):
+    def __init__(self, api_key: str, model: str = "voyage-4-lite", dims: int = 1024):
         import voyageai  # imported lazily so FakeEmbedder users don't need the key
 
         self._client = voyageai.AsyncClient(api_key=api_key)

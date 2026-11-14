@@ -53,7 +53,14 @@ async def world():
     ]
     for s, v in zip(seeds, await emb.embed_documents([s["text"] for s in seeds])):
         s["embedding"] = v
-    await db.cases.insert_one({"_id": case_id, "truth": {"killer": "butler"}, "seed_memories": seeds})
+    await db.cases.insert_one({
+        "_id": case_id, "truth": {"killer": "butler"}, "seed_memories": seeds,
+        "suspects": [{"id": "butler", "persona": "Formal and guarded.", "is_killer": True, "crack_threshold": 2},
+                     {"id": "cook", "persona": "Warm and observant.", "is_killer": False}],
+        "actions": [{"id": "search_cellar", "label": "Search the cellar", "reveals": "ev_glove"}],
+        "evidence": [{"id": "ev_glove", "text": "A bloody glove."}],
+        "events": [{"id": "gardener_recants", "ref": "ev_note", "replacement": "The gardener saw no one."}],
+    })
     a, b = Scope(case_id=case_id, team_id="A"), Scope(case_id=case_id, team_id="B")
     assert await store.seed_world(case_id, "A") == 2
     assert await store.seed_world(case_id, "B") == 2
@@ -65,6 +72,7 @@ async def world():
     await db.cases.delete_one({"_id": case_id})
     await db.offers.delete_many({"case_id": case_id})
     await db.audit.delete_many({"case_id": case_id})
+    await db.traces.delete_many({"case_id": case_id})
     await client.close()
 
 
@@ -152,3 +160,33 @@ async def test_offer_double_click_performs_once(world):
 async def test_policy_loaded_from_database(world):
     store, *_ = world
     assert store.policy.id == "mystery_v1" and store.policy.kinds["rumour"].ttl_seconds == 600
+
+
+async def test_atomic_reply_and_recantation_against_atlas(world):
+    from mystery_core.engine.context import TurnContext
+    from mystery_core.engine.turn import TurnService
+    from mystery_core.engine.actions import use_offer
+    from mystery_core.engine.events import apply_event
+    from mystery_core.memory import TraceStore
+    from mystery_core.memory.models import ReplyProposal
+
+    store, db, a, b = world
+    traces = TraceStore(db)
+    turns = TurnService(store, traces, model="test-no-live-model")
+    ctx = TurnContext(a, "butler", "t_atomic_" + a.case_id, "interrogate")
+    await traces.begin_turn(a, ctx.turn_id, BUTLER, ctx.command, "Where were you?")
+    [evidence] = await store.write(a, [NewMemory(
+        id=evidence_memory_id(a.case_id, "A", "butler", "ev_note"), text="The gardener saw the butler enter the cellar.",
+        known_by=[BUTLER], kind="evidence", source={"type": "evidence", "ref": "ev_note"}, unlocks=["search_cellar"],
+    )])
+    await turns.prepare(ctx, fresh_memory_ids=[evidence.id])
+    results = await asyncio.gather(*[turns.submit(ctx, ReplyProposal(
+        decision="deflect", reply=text, proposed_action="search_cellar", supporting_memory_id=evidence.id,
+    )) for text in ("Follow that lead.", "A competing reply.")])
+    assert results[0].reply == results[1].reply and results[0].offer_id
+    findings = await store.find_by_ref(a, "team:A", ctx.turn_id, kinds=["finding"])
+    assert len(findings) == 1 and findings[0].text == results[0].reply
+    assert await traces.get_trace(b, ctx.turn_id) is None
+    assert await store.fetch(b, BUTLER, [evidence.id]) == []
+    await apply_event(store, a.case_id, "gardener_recants", is_host=True)
+    assert (await use_offer(store, traces, a, results[0].offer_id)).status == "rejected"
