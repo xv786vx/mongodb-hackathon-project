@@ -85,6 +85,20 @@ async def test_supersede_by_ref_hits_only_worlds_holding_it(store, team_a, team_
     out = await store.supersede_by_ref("case_test", "ev_note", "The gardener saw no one.", "gardener_recants", "event")
     assert {m.team_id for m in out} == {"A"}
     assert all(m.unlocks == [] and m.source.type == "event" for m in out)
+    again = await store.supersede_by_ref("case_test", "ev_note", "ignored", "gardener_recants", "retry")
+    assert [m.id for m in again] == [m.id for m in out]
+
+
+async def test_supersede_by_ref_reports_only_this_refs_teams(store, team_a, team_b):
+    """One event, two refs: each call reports only the worlds that held its own ref."""
+    await store.write(team_a, [NewMemory(text="Shown the note", known_by=[BUTLER], kind="evidence",
+                                         source={"type": "evidence", "ref": "ev_note"})])
+    await store.write(team_b, [NewMemory(text="Heard about the glove", known_by=[BUTLER], kind="evidence",
+                                         source={"type": "evidence", "ref": "ev_glove"})])
+    first = await store.supersede_by_ref("case_test", "ev_note", "No note.", "ev1", "event")
+    second = await store.supersede_by_ref("case_test", "ev_glove", "No glove.", "ev1", "event")
+    assert {m.team_id for m in first} == {"A"} and {m.team_id for m in second} == {"B"}
+    assert {m.team_id for m in await store.supersede_by_ref("case_test", "ev_note", "No note.", "ev1", "retry")} == {"A"}
 
 
 def test_retrieve_pipeline_filters_in_both_stages():

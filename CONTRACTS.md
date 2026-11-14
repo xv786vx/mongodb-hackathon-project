@@ -67,7 +67,8 @@ Guarantees:
 - Search index lag: don't write then retrieve. Use the memories `write` returns.
 - `supersede` is one transaction (old -> superseded, replacement inserted, audit). Repeat returns the same replacement;
   `KeyError` if the memory isn't in this world, `ValueError` if it was superseded by something else.
-- `supersede_by_ref` skips worlds already superseded, so a repeat returns `[]`.
+- `supersede_by_ref` returns every replacement the event made for that ref, including ones from an earlier call, so a
+  retried `/event` returns the same list (same IDs) and writes nothing new.
 - Seed memories must have `id`, `text`, `kind` and `known_by`; `seed_world` raises a `ValueError` listing every problem.
 
 Status: everything above is live on Atlas and in `FakeStore`. `pytest -m atlas tests/test_isolation.py` checks it on Atlas.

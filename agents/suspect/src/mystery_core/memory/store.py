@@ -540,33 +540,54 @@ class MemoryStore:
         """World events only; called from engine/events.py by a host command (rule 17).
 
         Supersedes every active memory in the case whose source.ref == ref, in every world that holds one.
-        Replacements get source={type: event, ref: event_id} and no unlocks. Worlds already superseded are skipped,
-        so a repeat returns []. Returns the replacements; their team_ids are the teams to notify.
+        Replacements get source={type: event, ref: event_id} and no unlocks.
+
+        Returns every replacement this event made for this ref, including ones made by an earlier call, so a
+        retried or half-finished /event still returns the full list. Their team_ids are the teams to notify.
         """
         targets = await self._mem.find(
             {"case_id": case_id, "source.ref": ref, "status": "active", "expires_at": {"$gt": utcnow()}},
             {"embedding": 0},
         ).to_list()
-        if not targets:
-            return []
-        [embedding] = await self._embedder.embed_documents([replacement_text])
-        out = []
-        for doc in targets:
-            old = Memory.model_validate(doc)
-            new = NewMemory(
-                text=replacement_text,
-                known_by=old.known_by,
-                kind=old.kind,
-                source={"type": "event", "ref": event_id},
-                confidence=old.confidence,
-                embedding=embedding,
-            )
-            try:
-                out.append(await self._supersede(old.scope, old.id, new, reason))
-            except ValueError:
-                continue  # superseded concurrently by something else; skip that world
-        log.info("supersede_by_ref %s ref=%s event=%s -> %d", case_id, ref, event_id, len(out))
+        if targets:
+            [embedding] = await self._embedder.embed_documents([replacement_text])
+            for doc in targets:
+                old = Memory.model_validate(doc)
+                new = NewMemory(
+                    text=replacement_text,
+                    known_by=old.known_by,
+                    kind=old.kind,
+                    source={"type": "event", "ref": event_id},
+                    confidence=old.confidence,
+                    embedding=embedding,
+                )
+                try:
+                    await self._supersede(old.scope, old.id, new, reason)
+                except ValueError:
+                    continue  # superseded concurrently by something else; skip that world
+        out = await self._event_replacements(case_id, ref, event_id)
+        log.info("supersede_by_ref %s ref=%s event=%s new=%d total=%d", case_id, ref, event_id, len(targets), len(out))
         return out
+
+    async def _event_replacements(self, case_id: str, ref: str, event_id: str) -> list[Memory]:
+        """Replacements made by event_id for memories whose source.ref == ref. Scoped to this ref, so an event with
+        several changes doesn't report one change's teams under another (notify only worlds that held the ref)."""
+        olds = await self._mem.find(
+            {"case_id": case_id, "source.ref": ref, "status": "superseded", "superseded_by": {"$ne": None}},
+            {"superseded_by": 1},
+        ).to_list()
+        if not olds:
+            return []
+        docs = await self._mem.find(
+            {
+                "_id": {"$in": [d["superseded_by"] for d in olds]},
+                "case_id": case_id,
+                "source.type": "event",
+                "source.ref": event_id,
+            },
+            {"embedding": 0},
+        ).sort([("team_id", 1), ("_id", 1)]).to_list()
+        return [Memory.model_validate(d) for d in docs]
 
     async def forget(self, scope: Scope, viewer: str | None = None) -> int:
         """Hard-delete a world's memories (or only those one viewer holds). Writes one audit event with the count."""

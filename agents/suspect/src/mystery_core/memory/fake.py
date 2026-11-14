@@ -309,9 +309,8 @@ class FakeStore:
             for m in list(self.docs.values())
             if m.case_id == case_id and m.source.ref == ref and m.status == "active" and m.expires_at > now
         ]
-        out = []
         for old in targets:
-            out.append(
+            try:
                 await self.supersede(
                     old.scope,
                     old.id,
@@ -324,8 +323,20 @@ class FakeStore:
                     ),
                     reason,
                 )
-            )
-        return out
+            except ValueError:
+                continue
+        # Every replacement this event made for this ref, including earlier calls (same contract as MemoryStore).
+        new_ids = {
+            m.superseded_by
+            for m in self.docs.values()
+            if m.case_id == case_id and m.source.ref == ref and m.status == "superseded" and m.superseded_by
+        }
+        out = [
+            self._public(m)
+            for m in self.docs.values()
+            if m.id in new_ids and m.source.type == "event" and m.source.ref == event_id
+        ]
+        return sorted(out, key=lambda m: (m.team_id, m.id))
 
     async def forget(self, scope: Scope, viewer: str | None = None) -> int:
         if viewer is not None:
