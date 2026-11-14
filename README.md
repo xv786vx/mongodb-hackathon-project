@@ -1,6 +1,6 @@
 # mongodb-hackathon-project
 
-Death at Halloway Manor is a Discord mystery demonstrating governed AI memory in MongoDB Atlas.
+Murder Mystery is a Discord mystery demonstrating governed AI memory in MongoDB Atlas.
 Each detective team has a separate world; suspect tools retrieve only active, unexpired memories
 authorized for that team and character. Correcting a clue revokes the action it supported.
 
