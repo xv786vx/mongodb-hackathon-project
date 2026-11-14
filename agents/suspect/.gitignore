@@ -1,0 +1,4 @@
+.agentengine/
+.env.*
+!.env.example
+.devcontainer/

@@ -1,4 +1,8 @@
-"""Versioned prompt templates. Bump the file name to change a prompt, so old
+"""Versioned prompt resources included in the deployment wheel.
+
+suspect_v1.txt is the agent's system prompt (Person 2, loaded by turn.py). The templates
+below are for the optional LLM path of the contradiction step (Person 3).
+Versioned prompt templates. Bump the file name to change a prompt, so old
 traces still identify what produced them (AGENTS.md conventions)."""
 from __future__ import annotations
 
@@ -8,7 +12,6 @@ from string import Template
 
 _DIR = Path(__file__).parent
 
-TURN = "turn_v1"
 CONTRADICTION = "contradiction_v1"
 CORRECTION = "correction_v1"
 NEW_LIE = "new_lie_v1"

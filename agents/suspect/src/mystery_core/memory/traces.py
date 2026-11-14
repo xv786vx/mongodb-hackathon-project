@@ -76,8 +76,9 @@ def _completion_fields(**kw: Any) -> dict[str, Any]:
 
 
 class TraceStore:
-    def __init__(self, db: AsyncDatabase):
+    def __init__(self, db: AsyncDatabase, *, session=None):
         self._traces = db[TRACES]
+        self._session = session
 
     def _key(self, scope: Scope, turn_id: str) -> dict[str, Any]:
         return {"_id": _check_turn_id(turn_id), "case_id": scope.case_id, "team_id": scope.team_id}
@@ -120,7 +121,7 @@ class TraceStore:
         return Trace.model_validate(doc)
 
     async def get_trace(self, scope: Scope, turn_id: str) -> Trace | None:
-        doc = await self._traces.find_one(self._key(scope, turn_id))
+        doc = await self._traces.find_one(self._key(scope, turn_id), session=self._session)
         return Trace.model_validate(doc) if doc else None
 
     async def add_retrieved(self, scope: Scope, turn_id: str, memory_ids: Iterable[str]) -> None:
@@ -157,6 +158,7 @@ class TraceStore:
             self._key(scope, turn_id) | {"status": "pending"},
             {"$set": fields},
             return_document=ReturnDocument.AFTER,
+            session=self._session,
         )
         if doc:
             return Trace.model_validate(doc)

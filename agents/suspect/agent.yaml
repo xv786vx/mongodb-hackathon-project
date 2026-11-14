@@ -1,0 +1,42 @@
+name: halloway-suspect
+description: A scoped suspect for Death at Halloway Manor, using the governed mystery_core store.
+entrypoint: suspect_agent.graph:app
+features:
+  memory: false
+scaling:
+  replicas: 8
+  agent_idle_ttl_seconds: 120
+  tool_idle_ttl_seconds: 120
+sandboxes:
+  agent:
+    secrets:
+      - DB_NAME
+      - EMBEDDING_API_KEY
+      - EMBEDDING_MODEL
+      - EMBEDDING_DIMS
+      - LLM_API_KEY
+      - LLM_PROVIDER
+      - LLM_MODEL
+      - RUMOUR_TTL_SECONDS
+    tools:
+      - search_memories
+      - submit_reply
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]
+        - fqdn: api.voyageai.com
+          ports: [443]
+  tool:
+    secrets:
+      - LLM_API_KEY
+      - LLM_PROVIDER
+      - LLM_MODEL
+    tools:
+      - invoke_llm
+    network:
+      egress_mode: allow_list
+      egress:
+        - fqdn: api.openai.com
+          ports: [443]

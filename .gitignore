@@ -11,3 +11,10 @@ __pycache__/
 
 # handoff files sent to teammates (never committed)
 handoff/
+
+# Generated Agent Engine local files and diagnostics
+logs/
+agents/suspect/.agents/
+agents/suspect/.claude/
+agents/suspect/.agentengine/
+agents/suspect/.devcontainer/

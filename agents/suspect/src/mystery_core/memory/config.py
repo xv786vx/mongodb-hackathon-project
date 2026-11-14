@@ -21,7 +21,7 @@ VECTOR_INDEX = "memory_index"
 class Settings:
     mongodb_uri: str
     db_name: str
-    embedding_model: str = "voyage-3.5"
+    embedding_model: str = "voyage-4-lite"
     embedding_dims: int = 1024
     embedding_api_key: str | None = None
     rumour_ttl_seconds: int | None = None
@@ -32,7 +32,7 @@ class Settings:
         return cls(
             mongodb_uri=os.environ["MONGODB_URI"],
             db_name=os.environ["DB_NAME"],
-            embedding_model=os.environ.get("EMBEDDING_MODEL", "voyage-3.5"),
+            embedding_model=os.environ.get("EMBEDDING_MODEL", "voyage-4-lite"),
             embedding_dims=int(os.environ.get("EMBEDDING_DIMS", "1024")),
             embedding_api_key=os.environ.get("EMBEDDING_API_KEY") or None,
             rumour_ttl_seconds=int(rumour) if rumour else None,
