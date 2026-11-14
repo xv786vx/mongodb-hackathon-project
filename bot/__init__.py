@@ -1,4 +1,7 @@
-"""Discord bot. Until `pip install -e agents/suspect` is the norm, make mystery_core importable from the repo."""
+"""Bot integration adapters; Discord identity and posting remain the bot developer's responsibility.
+
+Until `pip install -e agents/suspect` is the norm, make mystery_core importable from the repo.
+"""
 import sys
 from pathlib import Path
 

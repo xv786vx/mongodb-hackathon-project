@@ -99,6 +99,17 @@ class NewMemory(BaseModel):
         return [validate_viewer(x) for x in v]
 
 
+class ReplyProposal(BaseModel):
+    """The complete model-controlled surface. Identity and permissions are deliberately absent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Decision
+    reply: str = Field(min_length=1, max_length=2000)
+    proposed_action: str | None = Field(default=None, min_length=1, max_length=128)
+    supporting_memory_id: str | None = Field(default=None, min_length=1, max_length=256)
+
+
 class Memory(_Doc):
     case_id: str
     team_id: str

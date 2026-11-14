@@ -1,0 +1,5 @@
+$name believed: "$belief"
+The detectives have just shown $name this evidence: "$evidence"
+The evidence proves the belief wrong.
+
+Write $name's corrected belief in the first person, in one or two sentences. Keep what is still true, drop what the evidence disproves, and do not add new facts. Reply with the sentence only.

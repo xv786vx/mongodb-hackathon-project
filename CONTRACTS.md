@@ -10,7 +10,7 @@ Code: `agents/suspect/src/mystery_core/memory/`. Install once with `pip install 
 
 | Decision | Choice |
 |---|---|
-| Embeddings | Voyage `voyage-3.5`, 1024 dims (`EMBEDDING_DIMS` must equal `memory_index.numDimensions`). `EMBEDDING_MODEL=fake` uses a deterministic offline embedder. |
+| Embeddings | Voyage `voyage-4-lite`, 1024 dims (`EMBEDDING_DIMS` must equal `memory_index.numDimensions`). `EMBEDDING_MODEL=fake` uses a deterministic offline embedder. The hosted and local suspect runtime requires the agreed Voyage model. |
 | Store API | **async** (PyMongo `AsyncMongoClient`). Person 2: if Agent Engine tools can't be `async def`, say so and a sync wrapper will be added. |
 | Case JSON | Every `seed_memories[]` item has a unique `id` (becomes `source.ref`, used by world events). Seed memories may carry `unlocks`. |
 
@@ -139,11 +139,103 @@ case without `--replace`.
 
 ## Agent Engine (Person 2)
 
-_TODO: custom header names, `submit_reply` arguments and writes._
+Entrypoint: `agents/suspect/agent.yaml` -> `suspect_agent.graph:app`. Built-in memory is off.
+Both tools are local async tools and expose no scope arguments:
 
-## Case JSON (Person 3)
+```python
+async def search_memories(query: str) -> str: ...
+async def submit_reply(decision: str, reply: str, proposed_action: str | None = None,
+                       supporting_memory_id: str | None = None) -> str: ...
+```
 
-_TODO. Memory layer needs: `_id` starting `case_`, `seed_memories[]` with `id`, `text`, `kind`, `known_by`, optional `unlocks`, `confidence`. See `tests/fixtures/mini_case.json`._
+Tools read `case-id`, `team-id`, `suspect-id`, `turn-id`, `command` from
+`get_current_custom_headers()`. The bot sends these using `X-Mdb-Agent-Engine-Custom-`.
+Missing/invalid headers, unknown suspects and a mismatched trace actor/command fail closed.
+The bot creates the pending trace **before** invocation. `begin_turn()` returns a Trace, not a prepared message.
+
+`TurnService(store, traces, model=...).prepare(ctx, fresh_memory_ids=())` returns a `PreparedTurn`.
+It records only live, scoped fresh IDs; the agent rebuilds the prompt from the immutable trace input,
+the current persona and freshly fetched memories. It never serializes the entire case or prior chat history.
+`search_memories` returns authorized IDs, text, kind, source, confidence and unlocks, and appends IDs to the trace.
+
+`submit_reply` uses `ReplyProposal`, removes bracketed tags, rechecks the confession gate and action support,
+and commits two deterministic memories (suspect interaction + team finding), the optional offer, and
+the terminal trace in one `store.atomic_turn(traces, callback)` transaction. The callback receives
+session-bound memory/trace stores. A completed retry returns the existing trace before writing anything.
+Replays write only a replay trace; they create no gameplay memories or offers.
+
+`bot.local_runner.run(prepared)` returns the same validated Trace using the direct model fallback.
+`suspect_agent.client.invoke(prepared)` sends `{"message": prepared.message}`, the five scope headers,
+the pinned preview Accept header, and a 60-second server wait budget. It omits `X-Session-ID`.
+The client exchanges bot-only `AGENT_ENGINE_CLIENT_ID`/`AGENT_ENGINE_CLIENT_SECRET` for a bearer token.
+Invocation responses are metadata, never the bot's dialogue source. A timeout may leave the server running;
+inspect the same scoped trace and preserve the turn ID.
+
+`mystery_core.engine.actions.use_offer(store, traces, clicker_scope, offer_id)` is the click-time helper.
+It verifies the current clicker's scope and re-fetches the supporting memory; consuming an offer and
+writing its finding commit together. The Discord developer must supply identity from the clicker's role,
+keep the private-channel checks, and deduplicate Discord posts separately (the agent never posts to Discord).
+
+`engine.evidence.present_evidence` authorizes the team's live notebook and returns a live scoped evidence memory.
+It does not implement the game's LLM contradiction step. The game orchestrator still owns that step before invocation.
+`engine.events.apply_event(..., is_host=True)` is the host-only route to cross-world supersession.
+
+Canonical seed verification: `python -m scripts.seed --case case_manor --teams A B --verify-model`.
+For a confirmed model mismatch, use `--reembed --reembed-worlds --verify-model`; this changes vectors,
+not memory text, access rules, status or lineage. Verification re-embeds with the actual configured model
+and checks the case clues and active canonical team copies against it.
+
+Workspace registered for this implementation: `ws-6af8c0b85e1f510db9b7a4f2` in project
+`6af88435eee09d5d80696a95`, Agent Engine organization `6aa1ed66371c6468b4a49ac1`.
+The Atlas organization ID is different; do not use it for CLI workspace context.
+
+## Case JSON and game engine (Person 3)
+
+### Case document
+
+**Atlas is the only copy of a case.** Cases live in `mystery.cases` (the demo case is `case_manor`). There is no case file in the repo; `tests/engine/fixtures/case_test.json` is a synthetic test case.
+
+Load with `case = await load_case(store, case_id)` (`mystery_core.engine.case`). It calls `store.get_case` and validates the document, so a broken case fails loudly at load time. `truth` is never part of a `Case`; only `engine/game.py` calls `store.get_truth`.
+
+| Field | Shape | Notes |
+|---|---|---|
+| `_id` | `"case_*"` | |
+| `title`, `victim`, `intro` | string | `intro` is safe to post publicly |
+| `truth` | `{killer, weapon, room}` (ids) | Read only through `get_truth`, by `engine/game.py` |
+| `suspects[]` | `{id, name, role, persona, is_killer, crack_threshold, voice_id, fallback_lies[], confession}` | Exactly one killer. Personas hold no case facts. `fallback_lies` are the killer's next lies when no LLM is used. `confession` (killer only) is what really happened; it is not a seed memory, so search never returns it, and `TurnService.prepare` adds it to the prompt (`confession_if_you_crack`) only once `crack` is allowed. `is_killer` stays visible in `get_case`; it decides `lie`/`crack` in `TurnService.allowed_decisions` and is never put in the prompt |
+| `rooms[]` | `{id, name, open}` | Every closed room must be opened by an action |
+| `weapons[]` | `{id, name}` | Objects, so the bot can show names |
+| `evidence[]` | `{id, name, room, text, unlocks[], contradicts}` | `contradicts`: `{seed_id: replacement text or null}`. `{}` means it contradicts nothing. Omitted means the optional LLM checker decides |
+| `actions[]` | `{id, label, reveals[], opens}` | `label` is the button text |
+| `events[]` | `{id, label, ref, replacement, notice, also[]}` | `also: [{ref, replacement}]` lets one event change several memories. Only worlds that held `ref` get the `notice` |
+| `seed_memories[]` | `{id, text, known_by[], kind, confidence, unlocks[]}` | `kind` is required: `witnessed` or `cover_story`. `id` becomes `source.ref` in every world |
+| `gossip` | `{topics[], pairs_per_round}` | `topics` is kept for content but no longer steers selection: a round picks from the speaker's spreadable memories without vector search (one embedding call per team). Each rumour has a fixed id per round and pair |
+
+Rooms avoid the famous board game's names (AGENTS.md rule 22): map room, pantry, scullery, greenhouse, cloakroom, wine cellar.
+
+### Engine entry points (`mystery_core.engine`)
+
+**All are `async def`**, because the store is async. The agent turn is Person 2's (`TurnService`, see "Agent Engine" above); the game rules are Person 3's.
+
+Turn flow for the bot: `traces.begin_turn` → for `/present` only, `turn.prepare_present` → `TurnService.prepare(ctx, fresh_memory_ids=[m.id for m in prep.fresh])` → hosted invoke or `local_runner.run` → `traces.get_trace`, posting only a `complete` trace.
+
+| Caller | Call | Returns |
+|---|---|---|
+| Bot `/interrogate` | `turn.prepare_interrogate(store, case, scope, suspect_id, question, recent_turns)` | `TurnPrep` (checks the suspect; no writes) |
+| Bot `/present` | `turn.prepare_present(store, case, scope, suspect_id, evidence_id, question="", recent_turns=(), llm=None)` | `TurnPrep`. Finding check, contradiction and supersession, then the evidence memory. Use this, not `evidence.present_evidence` (no contradiction step) |
+| Bot `/present` autocomplete | `actions.team_findings(store, case, scope)` | evidence the team holds |
+| Bot button click | `actions.use_offer(store, traces, clicker_scope, offer_id)` (Person 2's, atomic) | `ActionResult(status, finding_id, message, revealed)`: `performed`, `rejected` or `used`. Raises `TurnError("offer_not_found")` for an unknown offer or another team's offer. `message` is ready to post; `revealed` lists evidence ids |
+| Bot `/event` | `events.trigger_event(store, case, event_id)` | `EventResult(event, replaced, notify_teams)`; applies `also` too. `events.apply_event` is the minimal version (primary ref only, no notice) |
+| Bot `/search`, `/discover`, `/notebook` | `actions.search_room`, `actions.discover`, `actions.notebook` | |
+| Bot `/accuse` | `game.accuse(store, case, scope, who, weapon, room)`, `game.is_eliminated(store, scope)` | `AccusationResult(status, message)` |
+| Bot `/round` | `gossip.run_round(store, case, scope, round_no)` per team | rumours written; a retried round returns the same rumours |
+| Agent tools | `TurnService.search`, `TurnService.submit` (Person 2) | Decisions: `truth`, `deflect`; the killer also `lie`, and `crack` once the cover story has been broken `crack_threshold` times in that world. Offers are validated in `submit` |
+
+- `TurnPrep` has `ok`, `message` (a fixed invoke message; the agent rebuilds the prompt from the trace), `prompt_version`, `fresh` (pass the ids to `TurnService.prepare` and the trace's `written`), `superseded` and `error` (if `ok` is `False`, post it and don't invoke).
+- Findings use one text format (`"<name>: <text>"`) whichever path writes them: search, `/discover`, or a click.
+- `llm` is optional (`async (prompt) -> str`). The demo passes `None`, and the case's declared contradictions and `fallback_lies` are used.
+- Policy values come from `store.policy`, which the store loads from the `policies` collection.
+- The engine uses only store functions listed in "Store API" above. `GameStore` in `mystery_core/engine/ports.py` is the subset it calls; keep the two in step.
 
 ## Discord (Person 4)
 

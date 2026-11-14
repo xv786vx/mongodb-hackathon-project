@@ -10,6 +10,7 @@ unlocks), with cosine similarity in Python instead of $vectorSearch. Not for pro
 from __future__ import annotations
 
 import copy
+import asyncio
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -40,6 +41,17 @@ class FakeStore:
         self._rumour_ttl = rumour_ttl_seconds
         self._dedup_threshold = dedup_threshold
         self.now = utcnow  # override in tests to move time forward
+        self._turn_lock = asyncio.Lock()
+
+    async def atomic_turn(self, traces, operation):
+        """The fake's equivalent of a transaction, including rollback on a failed write."""
+        async with self._turn_lock:
+            saved = copy.deepcopy((self.docs, self.offers, self.audit, traces.traces))
+            try:
+                return await operation(self, traces)
+            except BaseException:
+                self.docs, self.offers, self.audit, traces.traces = saved
+                raise
 
     # --- helpers ------------------------------------------------------------------
 

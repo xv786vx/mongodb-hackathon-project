@@ -55,7 +55,11 @@ async def main() -> None:
     ap.add_argument("--replace", action="store_true", help="with --file: overwrite an existing case document")
     ap.add_argument("--reembed", action="store_true", help="recompute existing embeddings")
     ap.add_argument("--teams", nargs="*", default=[], help="team ids whose worlds to seed")
+    ap.add_argument("--verify-model", action="store_true", help="verify clue and world vectors against the configured embedding model")
+    ap.add_argument("--reembed-worlds", action="store_true", help="recompute active team-world vectors without changing gameplay data; requires --reembed")
     args = ap.parse_args()
+    if args.reembed_worlds and not args.reembed:
+        ap.error("--reembed-worlds requires --reembed")
 
     settings = Settings.from_env()
     embedder = embedder_from_settings(settings)
@@ -84,6 +88,13 @@ async def main() -> None:
         store = await MemoryStore.open(settings, client=client, embedder=embedder)
         for team in args.teams:
             print(f"Seeded world {case_id}/{team}: {await store.seed_world(case_id, team)} new memories")
+            if args.reembed_worlds:
+                from mystery_core.memory.models import Scope
+                count = await store.reembed_world(Scope(case_id=case_id, team_id=team))
+                print(f"Re-embedded world {case_id}/{team}: {count} active memories")
+        if args.verify_model:
+            result = await store.verify_seed_embeddings(case_id, args.teams)
+            print(f"Verified model {settings.embedding_model}: {result}")
     finally:
         await client.close()
 
