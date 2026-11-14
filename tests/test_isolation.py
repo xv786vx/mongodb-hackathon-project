@@ -125,7 +125,9 @@ async def test_world_event_hits_only_holders_and_kills_the_lead(world):
     assert all(m.unlocks == [] and m.source.type == "event" and m.source.ref == "gardener_recants" for m in out)
     assert await store.fetch(a, BUTLER, [ev.id]) == []  # the old lead no longer holds
     assert await store.find_by_ref(a, "team:A", "ev_note") == []  # cannot present it again
-    assert await store.supersede_by_ref(a.case_id, "ev_note", "x", "gardener_recants", "repeat") == []
+    again = await store.supersede_by_ref(a.case_id, "ev_note", "x", "gardener_recants", "repeat")
+    assert sorted(m.id for m in again) == sorted(m.id for m in out)  # a retried /event still names the teams
+    assert all(m.text != "x" for m in again)  # and writes nothing new
 
 
 async def test_expired_excluded_before_ttl_delete(world):
