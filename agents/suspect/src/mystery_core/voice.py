@@ -16,10 +16,11 @@ BASE: dict[str, tuple[float, float]] = {
     "truth": (0.80, 0.10),
     "lie": (0.80, 0.10),          # identical to truth, on purpose
     "deflect": (0.45, 0.50),
-    "crack": (0.20, 0.85),
+    "crack": (0.10, 0.90),        # chosen by ear: Flash barely moves with these, so crack uses CRACK_MODEL
 }
 
 DEFAULT_MODEL = "eleven_flash_v2_5"
+CRACK_MODEL = "eleven_multilingual_v2"   # follows stability and style far more audibly than Flash; slower
 TAG_MODEL = "eleven_v3"            # inline audio tags work only on this model
 TAG_WHITELIST: dict[str, str] = {"crack": "[sighs]"}   # the only tags we ever add; the model cannot add its own
 SIMILARITY = 0.75
@@ -59,6 +60,8 @@ def settings_for(decision: str, mean_confidence: float = 1.0, cover_breaks: int 
     if decision not in BASE:
         raise ValueError(f"unknown decision: {decision!r}")
     stability, style = BASE[decision]
+    if decision == "crack" and model == DEFAULT_MODEL:     # an explicit other model (such as v3) is respected
+        model = CRACK_MODEL
     # A suspect repeating a fading rumour sounds unsure.
     stability *= 0.6 + 0.4 * _clamp(mean_confidence)
     # A suspect who has been broken before sounds shakier. Does not touch truth or lie.

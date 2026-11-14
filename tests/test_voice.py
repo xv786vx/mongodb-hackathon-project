@@ -89,3 +89,12 @@ def test_speak_errors_never_leak_the_key():
 def test_speak_needs_a_key():
     with pytest.raises(TtsError):
         asyncio.run(speak(Settings(), "v", "hi", "truth", settings_for("truth")))
+
+
+def test_crack_uses_the_stronger_model_and_others_stay_on_flash():
+    from mystery_core.voice import CRACK_MODEL, DEFAULT_MODEL
+    assert settings_for("crack").model == CRACK_MODEL
+    assert settings_for("crack", model=TAG_MODEL).model == TAG_MODEL      # explicit choice wins
+    for d in ("truth", "lie", "deflect"):
+        assert settings_for(d).model == DEFAULT_MODEL
+    assert settings_for("truth").model == settings_for("lie").model
