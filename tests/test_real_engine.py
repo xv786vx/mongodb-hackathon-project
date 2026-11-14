@@ -87,7 +87,7 @@ async def test_engine_results_are_mapped_when_modules_exist():
 
     def prepare_interrogate(store, case, scope, suspect_id, question, recent):      # sync works too
         calls["scope"] = scope
-        return NS(ok=True, error="", message="TURN MESSAGE", prompt_version="suspect_v1", fresh=["m_1"])
+        return NS(ok=True, error=None, message="TURN MESSAGE", prompt_version="suspect_v1", fresh=[NS(id="m_1")])
 
     e = engine(engine_case=object(), modules={
         "actions": NS(use_offer=use_offer),

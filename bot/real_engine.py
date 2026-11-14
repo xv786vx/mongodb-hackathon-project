@@ -180,9 +180,10 @@ class RealEngine:
 
     @staticmethod
     def _prep(p: Any) -> TurnPrep:
+        # The engine's `fresh` is a list of Memory objects; the trace's `written` wants their ids.
+        fresh = tuple(m if isinstance(m, str) else m.id for m in (getattr(p, "fresh", ()) or ()))
         return TurnPrep(ok=bool(p.ok), error=getattr(p, "error", "") or "", message=getattr(p, "message", "") or "",
-                        prompt_version=getattr(p, "prompt_version", "") or "",
-                        fresh=tuple(getattr(p, "fresh", ()) or ()))
+                        prompt_version=getattr(p, "prompt_version", "") or "", fresh=fresh)
 
     async def team_findings(self, team_id) -> list[Evidence]:
         actions = self._need("actions")
