@@ -8,3 +8,10 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+
+# Generated Agent Engine local files and diagnostics
+logs/
+agents/suspect/.agents/
+agents/suspect/.claude/
+agents/suspect/.agentengine/
+agents/suspect/.devcontainer/

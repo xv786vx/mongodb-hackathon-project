@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Iterable, Protocol
+from typing import Any, Awaitable, Callable, Iterable, Protocol, TypeVar
 
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
@@ -30,6 +30,9 @@ from .config import (
 from .embeddings import Embedder, embedder_from_settings
 from .models import KINDS, AuditEvent, ExpiryNotice, Memory, NewMemory, Offer, OfferStatus, Scope, validate_viewer
 from .policy import DEFAULT_POLICY, POLICY_ID, Policy, utcnow
+from .traces import TraceStore, TraceStoreAPI
+
+T = TypeVar("T")
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +94,8 @@ class MemoryStoreAPI(Protocol):
 
     @property
     def policy(self) -> Policy: ...
+
+    async def atomic_turn(self, traces: TraceStoreAPI, operation: Callable[..., Awaitable[T]]) -> T: ...
 
 
 def check_seed_memories(case_id: str, seeds: list[dict[str, Any]]) -> None:
@@ -201,6 +206,8 @@ class MemoryStore:
         policy: Policy = DEFAULT_POLICY,
         rumour_ttl_seconds: int | None = None,
         dedup_threshold: float = 0.97,
+        *,
+        session=None,
     ):
         self._db = db
         self._mem = db[MEMORIES]
@@ -208,6 +215,21 @@ class MemoryStore:
         self._policy = policy
         self._rumour_ttl = rumour_ttl_seconds
         self._dedup_threshold = dedup_threshold
+        self._session = session
+
+    async def atomic_turn(self, traces: TraceStoreAPI, operation: Callable[..., Awaitable[T]]) -> T:
+        """Commit gameplay writes and a terminal trace in the same retryable Atlas transaction."""
+        if not isinstance(traces, TraceStore) or traces._traces.database != self._db:
+            raise ValueError("memory and trace stores must use the same Atlas database")
+
+        async def txn(session):
+            scoped = MemoryStore(
+                self._db, self._embedder, self._policy, self._rumour_ttl, self._dedup_threshold, session=session
+            )
+            return await operation(scoped, TraceStore(self._db, session=session))
+
+        async with self._db.client.start_session() as session:
+            return await session.with_transaction(txn)
 
     @classmethod
     def from_settings(
@@ -268,7 +290,7 @@ class MemoryStore:
         if not wanted:
             return []
         flt = scope_filter(scope, viewer, utcnow()) | {"_id": {"$in": wanted}}
-        docs = await self._mem.find(flt, {"embedding": 0}).to_list()
+        docs = await self._mem.find(flt, {"embedding": 0}, session=self._session).to_list()
         by_id = {d["_id"]: d for d in docs}
         return [Memory.model_validate(by_id[i]) for i in wanted if i in by_id]
 
@@ -289,6 +311,20 @@ class MemoryStore:
         out: list[Memory] = []
         for new in memories:
             embedding = new.embedding if new.embedding is not None else next(vectors)
+
+            if new.id is not None and self._session is not None:
+                existing = await self._mem.find_one(
+                    {"_id": new.id, "case_id": scope.case_id, "team_id": scope.team_id},
+                    {"embedding": 0}, session=self._session,
+                )
+                if existing is not None:
+                    saved = Memory.model_validate(existing)
+                    if (saved.text, saved.known_by, saved.kind, saved.source) != (
+                        new.text, new.known_by, new.kind, new.source
+                    ):
+                        raise ValueError("deterministic memory id was reused for a different outcome")
+                    out.append(saved)
+                    continue
 
             if new.id is None and dedup:
                 dup = await self._find_duplicate(scope, new, embedding, now)
@@ -315,8 +351,10 @@ class MemoryStore:
                 embedding=embedding,
             )
             try:
-                await self._mem.insert_one(mem.to_doc())
+                await self._mem.insert_one(mem.to_doc(), session=self._session)
             except DuplicateKeyError:
+                if self._session is not None:
+                    raise
                 existing = await self._mem.find_one(
                     {"_id": mem.id, "case_id": scope.case_id, "team_id": scope.team_id}, {"embedding": 0}
                 )
@@ -409,15 +447,65 @@ class MemoryStore:
                 "known_by": validate_viewer(viewer),
                 "kind": kind,
                 "status": "superseded",
-            }
+            }, session=self._session,
         )
+
+    async def verify_seed_embeddings(self, case_id: str, teams: Iterable[str]) -> dict[str, int]:
+        """Verify seeded vectors against this store's actual model, not just their dimension count.
+
+        Re-embeds the case clues once without changing them. Used by the canonical seed command's preflight.
+        Only this store reads the world copies; no private memory text is returned to the caller.
+        """
+        case = await self._db[CASES].find_one({"_id": case_id}, {"seed_memories": 1})
+        if case is None:
+            raise ValueError("case not found")
+        seeds = case.get("seed_memories", [])
+        check_seed_memories(case_id, seeds)
+        vectors = await self._embedder.embed_documents([s["text"] for s in seeds])
+
+        def agrees(left, right):
+            return len(left) == len(right) and all(abs(a - b) < 0.0001 for a, b in zip(left, right))
+
+        checked = 0
+        for seed, vector in zip(seeds, vectors):
+            if not agrees(seed.get("embedding", []), vector):
+                raise ValueError(f"seed {seed['id']} embedding does not match the configured model")
+            for team in teams:
+                scope = Scope(case_id=case_id, team_id=team)
+                flt = scope_filter(scope, seed["known_by"][0], utcnow()) | {
+                    "_id": ids.seed_memory_id(case_id, team, seed["id"])
+                }
+                memory = await self._mem.find_one(flt, {"embedding": 1, "text": 1})
+                if memory is None or memory["text"] != seed["text"] or not agrees(memory.get("embedding", []), vector):
+                    raise ValueError(f"world {team} seed {seed['id']} is absent, inactive, or uses a different embedding")
+                checked += 1
+        return {"seed_count": len(seeds), "verified_world_copies": checked}
+
+    async def reembed_world(self, scope: Scope) -> int:
+        """Repair a model mismatch without deleting memories or changing text, visibility, status or lineage."""
+        case = await self.get_case(scope.case_id)
+        if case is None:
+            raise ValueError("case not found")
+        viewers = ["team:" + scope.team_id, *["suspect:" + s["id"] for s in case.get("suspects", [])]]
+        docs = {}
+        for viewer in viewers:
+            for memory in await self.list_by_viewer(scope, viewer):
+                docs[memory.id] = memory
+        memories = list(docs.values())
+        vectors = await self._embedder.embed_documents([m.text for m in memories])
+        updated = 0
+        for memory, vector in zip(memories, vectors):
+            flt = scope_filter(scope, memory.known_by[0], utcnow()) | {"_id": memory.id}
+            result = await self._mem.update_one(flt, {"$set": {"embedding": vector}})
+            updated += result.matched_count
+        return updated
 
     # --- cases ---------------------------------------------------------------------
 
     async def get_case(self, case_id: str) -> dict[str, Any] | None:
         """The case document without `truth` and without seed embeddings. None if unknown.
         Safe to cache per case_id; use this everywhere except engine/game.py."""
-        return await self._db[CASES].find_one({"_id": case_id}, CASE_HIDDEN_FIELDS)
+        return await self._db[CASES].find_one({"_id": case_id}, CASE_HIDDEN_FIELDS, session=self._session)
 
     async def get_truth(self, case_id: str) -> dict[str, Any] | None:
         """{killer, weapon, room} or None. Only engine/game.py may call this, to check an accusation (rule 5).
@@ -591,7 +679,7 @@ class MemoryStore:
         flt = scope_filter(scope, viewer, utcnow()) | {"source.ref": ref}
         if kinds:
             flt["kind"] = {"$in": list(kinds)}
-        return [Memory.model_validate(d) for d in await self._mem.find(flt, {"embedding": 0}).to_list()]
+        return [Memory.model_validate(d) for d in await self._mem.find(flt, {"embedding": 0}, session=self._session).to_list()]
 
     async def list_by_viewer(self, scope: Scope, viewer: str, kinds: Iterable[str] | None = None) -> list[Memory]:
         """All active memories this viewer holds in this world, oldest first (e.g. /present autocomplete)."""
@@ -604,15 +692,20 @@ class MemoryStore:
     # --- offers -----------------------------------------------------------------------
 
     async def get_offer(self, offer_id: str) -> Offer | None:
-        doc = await self._db[OFFERS].find_one({"_id": offer_id})
+        doc = await self._db[OFFERS].find_one({"_id": offer_id}, session=self._session)
         return Offer.model_validate(doc) if doc else None
 
     async def insert_offer(self, offer: Offer) -> Offer:
         """Insert, or return the existing offer with the same _id (ids.offer_id is deterministic)."""
         try:
-            await self._db[OFFERS].insert_one(offer.to_doc())
+            existing = await self.get_offer(offer.id)
+            if existing is not None:
+                return existing
+            await self._db[OFFERS].insert_one(offer.to_doc(), session=self._session)
             return offer
         except DuplicateKeyError:
+            if self._session is not None:
+                raise
             existing = await self.get_offer(offer.id)
             assert existing is not None
             return existing
@@ -620,7 +713,8 @@ class MemoryStore:
     async def transition_offer(self, offer_id: str, from_status: OfferStatus, to_status: OfferStatus) -> bool:
         """One atomic update. True only for the call that made the change (a double click performs the action once)."""
         res = await self._db[OFFERS].update_one(
-            {"_id": offer_id, "status": from_status}, {"$set": {"status": to_status, "updated_at": utcnow()}}
+            {"_id": offer_id, "status": from_status}, {"$set": {"status": to_status, "updated_at": utcnow()}},
+            session=self._session,
         )
         return res.modified_count == 1
 
@@ -629,6 +723,7 @@ class MemoryStore:
             await self._db[OFFERS].find_one(
                 {"case_id": scope.case_id, "team_id": scope.team_id, "action": action, "status": "used"},
                 {"_id": 1},
+                session=self._session,
             )
             is not None
         )
@@ -660,4 +755,6 @@ class MemoryStore:
     async def log_audit(self, event: AuditEvent) -> None:
         """IDs only, never memory text. Idempotent on event.id."""
         doc = event.to_doc()
-        await self._db[AUDIT].update_one({"_id": doc.pop("_id")}, {"$setOnInsert": doc}, upsert=True)
+        await self._db[AUDIT].update_one(
+            {"_id": doc.pop("_id")}, {"$setOnInsert": doc}, upsert=True, session=self._session
+        )
