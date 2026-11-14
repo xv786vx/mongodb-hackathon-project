@@ -383,7 +383,7 @@ The correction happens before the reply is generated.
 1. Check that the team's notebook holds an active finding whose `source.ref` is this evidence.
 2. Write an `evidence` memory for the suspect, copying the evidence item's `unlocks`.
 3. Contradiction check: retrieve the suspect's active beliefs near the evidence text (`witnessed`, `rumour`, `cover_story`), then ask the LLM for `{ "contradicts": true, "memory_id": "..." }`.
-4. Apply the policy's `on_contradiction`: `correct` supersedes the belief with a corrected one; `new_lie` supersedes the cover story with a new one (`source.type: "fabricated"`).
+4. Apply the policy's `on_contradiction`: `correct` supersedes the belief with a corrected one; `new_lie` supersedes the cover story with a new one (`source.type: "fabricated"`, `source.ref` = the evidence that broke it). Every replacement carries the evidence id, so a retried `/present` applies the contradiction once; the evidence memory is written last.
 5. Continue as `/interrogate` from step 2, with the evidence and the new memory in the trusted part of the message.
 
 ### Leads and actions
@@ -437,7 +437,7 @@ A timeout, a double click or a model calling a tool twice must not create a seco
 
 | Worker | Trigger | Action |
 |---|---|---|
-| `gossip.py` | `/round` | Per world, for selected suspect pairs: copy the speaker's propagating memories on a topic to the listener as `rumour`, with decayed confidence and the rumour TTL. |
+| `gossip.py` | `/round` | Per world, for selected suspect pairs: copy one of the speaker's propagating memories (chosen deterministically, no vector search) to the listener as `rumour` with a fixed id per round and pair, with decayed confidence and the rumour TTL. |
 | `expiry_notices.py` | Change stream on `memories`, delete events, `fullDocumentBeforeChange: "whenAvailable"` | Writes an `audit` event and posts "a rumour has faded" in that team's channel. Stores its resume token. |
 
 ---

@@ -1,0 +1,77 @@
+{
+  "_id": "case_test",
+  "title": "Test Case",
+  "victim": "The victim",
+  "intro": "A synthetic case for unit tests. Same mechanics as a real case, no real content.",
+  "truth": { "killer": "butler", "weapon": "poker", "room": "office" },
+
+  "suspects": [
+    { "id": "butler", "name": "Bram Butler", "role": "the butler",
+      "persona": "Stiff and formal.", "is_killer": true, "crack_threshold": 2,
+      "fallback_lies": ["Fine, I left the pantry once, only to check the cellar door.",
+                        "I fetched a bottle from the cellar. That glove is not mine."],
+      "confession": "I struck the victim with the poker in the office." },
+    { "id": "cook", "name": "Cora Cook", "role": "the cook", "persona": "Chatty and sure of herself." },
+    { "id": "gardener", "name": "Gus Gardener", "role": "the gardener", "persona": "Quiet and nervous." },
+    { "id": "niece", "name": "Nia Niece", "role": "the niece", "persona": "Sharp and defensive." }
+  ],
+
+  "rooms": [
+    { "id": "office", "name": "the office", "open": true },
+    { "id": "pantry", "name": "the pantry", "open": true },
+    { "id": "greenhouse", "name": "the greenhouse", "open": true },
+    { "id": "cloakroom", "name": "the cloakroom", "open": true },
+    { "id": "wine_cellar", "name": "the wine cellar", "open": false }
+  ],
+
+  "weapons": [
+    { "id": "poker", "name": "the poker" },
+    { "id": "shears", "name": "the shears" }
+  ],
+
+  "evidence": [
+    { "id": "ev_note", "name": "The note", "room": "greenhouse",
+      "text": "After midnight the butler went down the cellar steps.",
+      "unlocks": ["search_cellar"], "contradicts": {} },
+    { "id": "ev_ledger", "name": "The ledger", "room": "pantry",
+      "text": "Pantry work ended at ten.", "contradicts": { "s_butler_cover": null } },
+    { "id": "ev_glove", "name": "A bloody glove", "room": "wine_cellar",
+      "text": "A bloody glove with the butler's initials.", "contradicts": { "s_butler_cover": null } },
+    { "id": "ev_poker", "name": "The fire poker", "room": "office",
+      "text": "The poker, wiped clean, under the office desk.", "contradicts": {} },
+    { "id": "ev_letter", "name": "A letter", "room": "office",
+      "text": "A letter dismissing the butler.", "contradicts": {} },
+    { "id": "ev_ticket", "name": "A train ticket", "room": "cloakroom",
+      "text": "The niece's ticket for the late train.",
+      "contradicts": { "s_cook_quarrel": "I was wrong: the niece was on the train, so it was someone else shouting." } }
+  ],
+
+  "actions": [
+    { "id": "search_cellar", "label": "Search the cellar", "reveals": ["ev_glove"], "opens": "wine_cellar" }
+  ],
+
+  "events": [
+    { "id": "gardener_recants", "label": "The gardener recants", "ref": "ev_note",
+      "replacement": "The gardener withdrew the note.",
+      "notice": "The gardener has taken back his note.",
+      "also": [ { "ref": "s_gardener_cellar", "replacement": "I saw no one by the cellar." } ] }
+  ],
+
+  "seed_memories": [
+    { "id": "s_butler_cover", "kind": "cover_story", "known_by": ["suspect:butler"],
+      "text": "I stayed in the pantry all night." },
+    { "id": "s_cook_quarrel", "kind": "witnessed", "known_by": ["suspect:cook"],
+      "text": "Near midnight I heard the niece shouting in the office. I know her voice anywhere." },
+    { "id": "s_cook_cocoa", "kind": "witnessed", "known_by": ["suspect:cook"], "text": "I made cocoa at eleven." },
+    { "id": "s_gardener_cellar", "kind": "witnessed", "known_by": ["suspect:gardener"],
+      "text": "After midnight I saw the butler go down the cellar steps." },
+    { "id": "s_gardener_shears", "kind": "witnessed", "known_by": ["suspect:gardener"],
+      "text": "The shears stayed in the greenhouse." },
+    { "id": "s_niece_train", "kind": "witnessed", "known_by": ["suspect:niece"], "text": "I was on the late train." },
+    { "id": "s_all_dinner", "kind": "witnessed", "known_by": ["suspect:butler", "suspect:cook", "suspect:niece"],
+      "text": "Dinner was at eight and the victim was angry." }
+  ],
+
+  "gossip": { "topics": ["the victim", "the niece", "the butler", "the cellar", "midnight"], "pairs_per_round": 2 },
+  "status": "active"
+}

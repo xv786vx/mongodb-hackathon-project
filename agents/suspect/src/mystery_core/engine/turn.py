@@ -75,12 +75,17 @@ class TurnService:
             await self.traces.add_retrieved(ctx.scope, ctx.turn_id, [m.id for m in fresh])
         visible = await self.store.fetch(ctx.scope, ctx.viewer, list(trace.retrieved) + [m.id for m in fresh])
         sheet = {key: suspect[key] for key in ("id", "name", "persona") if key in suspect}
+        allowed = await self.allowed_decisions(self.store, ctx, suspect)
         payload = {
             "character": sheet,
-            "allowed_decisions": await self.allowed_decisions(self.store, ctx, suspect),
+            "allowed_decisions": allowed,
             "actions": [{"id": a["id"], "label": a["label"]} for a in case.get("actions", [])],
             "fresh_memories": [self.memory_payload(m) for m in visible],
         }
+        # Added by Person 3: the killer's deed is not a seed memory (search can never return
+        # it). It enters the prompt only once the crack gate has passed (rule 13).
+        if "crack" in allowed and suspect.get("confession"):
+            payload["confession_if_you_crack"] = suspect["confession"]
         system = files("mystery_core.engine.prompts").joinpath(PROMPT_VERSION + ".txt").read_text(encoding="utf-8")
         system += "\nTrusted turn data:\n" + json.dumps(payload, ensure_ascii=False)
         # Use the immutable bot-created trace input, not facts embedded in a potentially stale prepared message.
@@ -170,3 +175,8 @@ class TurnService:
                       case_id=ctx.scope.case_id, team_id=ctx.scope.team_id, action=action["id"],
                       supported_by=memory.id, held_by=ctx.viewer, offered_in=ctx.turn_id, ts=utcnow())
         return offer, action["label"], None
+
+
+# Added by Person 3: the bot's /interrogate and /present preparation (game rules) lives in
+# present.py and is re-exported here so `mystery_core.engine.turn.prepare_present` keeps working.
+from .present import TurnPrep, prepare_interrogate, prepare_present  # noqa: E402,F401

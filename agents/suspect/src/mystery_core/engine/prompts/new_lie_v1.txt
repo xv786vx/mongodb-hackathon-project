@@ -1,0 +1,5 @@
+$name is guilty and has been telling this cover story: "$belief"
+The detectives have just shown $name this evidence: "$evidence"
+The evidence breaks the cover story.
+
+Write $name's new cover story in the first person, in one or two sentences. It must account for the evidence while still hiding the truth. It must not confess. Reply with the sentence only.
