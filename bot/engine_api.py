@@ -15,6 +15,7 @@ class Suspect:
     id: str
     name: str
     role: str = ""
+    voice_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,3 +128,5 @@ class Engine(Protocol):
     def accuse(self, team_id: str, who: str, weapon: str, room: str) -> AccusationResult: ...
     def run_round(self, team_id: str, round_no: int) -> int: ...              # post nothing about content
     def is_eliminated(self, team_id: str) -> bool: ...
+    def voice_inputs(self, team_id: str, trace: "Trace") -> tuple[float, int]: ...   # (mean confidence, cover breaks)
+    def record_voice(self, team_id: str, turn_id: str, voice: dict) -> None: ...      # traces.set_voice

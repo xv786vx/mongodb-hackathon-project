@@ -155,3 +155,10 @@ class FakeEngine:
 
     def is_eliminated(self, team_id):
         return team_id in self.eliminated
+
+    def voice_inputs(self, team_id, trace):
+        return 1.0, 0
+
+    def record_voice(self, team_id, turn_id, voice):
+        self.voices = getattr(self, "voices", {})
+        self.voices[(team_id, turn_id)] = voice

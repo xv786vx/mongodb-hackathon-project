@@ -16,6 +16,15 @@ def _pairs(raw: str) -> dict[str, int]:
     return out
 
 
+def _str_pairs(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in filter(None, (p.strip() for p in raw.split(","))):
+        key, _, val = part.partition(":")
+        if key.strip() and val.strip():
+            out[key.strip()] = val.strip()
+    return out
+
+
 def _int(raw: str | None) -> int | None:
     return int(raw) if raw and raw.strip().isdigit() else None
 
@@ -37,6 +46,9 @@ class Settings:
     ae_client_secret: str = ""
     ae_api_key: str = ""             # optional static bearer token, used only if no client credentials are set
     ae_base_url: str = "https://agentengine.mongodb.com"
+    elevenlabs_api_key: str = ""
+    voice_model: str = "eleven_flash_v2_5"
+    voice_ids: dict[str, str] = field(default_factory=dict)   # suspect id -> voice id; the case's voice_id wins
 
     @property
     def team_for_role(self) -> dict[int, str]:
@@ -80,6 +92,9 @@ def load() -> Settings:
         case_room_channel_id=_int(e("CASE_ROOM_CHANNEL_ID")),
         ae_project_id=e("AGENT_ENGINE_PROJECT_ID", "").strip(),
         ae_workspace_id=e("AGENT_ENGINE_WORKSPACE_ID", "").strip(),
+        elevenlabs_api_key=e("ELEVENLABS_API_KEY", "").strip(),
+        voice_model=e("VOICE_MODEL", "eleven_flash_v2_5").strip(),
+        voice_ids=_str_pairs(e("VOICE_IDS", "")),
         ae_client_id=e("AGENT_ENGINE_CLIENT_ID", "").strip(),
         ae_client_secret=e("AGENT_ENGINE_CLIENT_SECRET", "").strip(),
         ae_api_key=e("AGENT_ENGINE_API_KEY", "").strip(),

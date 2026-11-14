@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 
 import discord
@@ -9,9 +10,11 @@ import discord
 from bot.config import Settings
 from bot.engine_api import Engine
 from bot import invoke as ae
+from bot import tts
 from bot.identity import Caller
 from bot.render import reply_embed
 from bot.views import offer_view
+from mystery_core.voice import settings_for
 
 log = logging.getLogger("bot.turns")
 
@@ -79,5 +82,30 @@ async def run_turn(interaction: discord.Interaction, cfg: Settings, engine: Engi
     kwargs = {"embed": reply_embed(trace, names[suspect_id])}
     if trace.offer_id:
         kwargs["view"] = offer_view(trace.offer_id, trace.offer_label or "Take this lead")
-    await interaction.followup.send(**kwargs)
-    # Phase 2: attach the voice clip here with edit_original_response(attachments=[...]).
+    message = await interaction.followup.send(wait=True, **kwargs)      # text first
+    await attach_clip(cfg, engine, caller, trace, suspect_id, message)  # then the clip
+
+
+def voice_id_for(cfg: Settings, engine: Engine, suspect_id: str) -> str | None:
+    for s in engine.case_info().suspects:
+        if s.id == suspect_id and s.voice_id:
+            return s.voice_id                                   # the case document wins
+    return cfg.voice_ids.get(suspect_id)                         # local testing fallback
+
+
+async def attach_clip(cfg, engine, caller, trace, suspect_id, message) -> None:
+    """One clip per suspect reply, attached to the message in the team's private channel (rules 18, 20).
+
+    Any failure is logged and swallowed: a voice problem never blocks or retracts the text.
+    """
+    voice_id = voice_id_for(cfg, engine, suspect_id)
+    if not (cfg.elevenlabs_api_key and voice_id and trace.decision):
+        return
+    try:
+        confidence, breaks = await asyncio.to_thread(engine.voice_inputs, caller.team_id, trace)
+        settings = settings_for(trace.decision, confidence, breaks, cfg.voice_model)
+        audio = await tts.speak(cfg, voice_id, trace.reply, trace.decision, settings)
+        await message.edit(attachments=[discord.File(io.BytesIO(audio), filename="reply.mp3")])
+        await asyncio.to_thread(engine.record_voice, caller.team_id, trace.turn_id, settings.to_trace(voice_id))
+    except Exception as e:                                       # noqa: BLE001 - voice must never break a turn
+        log.warning("turn %s: no clip (%s)", trace.turn_id, e.__class__.__name__)
