@@ -44,6 +44,7 @@ async def test_check_truth(case):
      "not reachable"),
     (lambda d: d["suspects"][1].update(is_killer=True), "exactly one suspect"),
     (lambda d: d["suspects"][1].update(confession="I did it."), "only the killer may have a confession"),
+    (lambda d: d["events"][0].update(ref="ev_ledger"), "breaks a cover story"),
     (lambda d: d["seed_memories"][0].update(known_by=["suspect:nobody"]), "unknown viewer"),
     (lambda d: d["events"][0].update(ref="ev_nothing"), "unknown ref"),
     (lambda d: d["evidence"][1].update(contradicts={"s_nothing": None}), "contradicts unknown"),

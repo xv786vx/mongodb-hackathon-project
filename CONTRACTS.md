@@ -161,7 +161,7 @@ Load with `case = await load_case(store, case_id)` (`mystery_core.engine.case`).
 | `actions[]` | `{id, label, reveals[], opens}` | `label` is the button text |
 | `events[]` | `{id, label, ref, replacement, notice, also[]}` | `also: [{ref, replacement}]` lets one event change several memories. Only worlds that held `ref` get the `notice` |
 | `seed_memories[]` | `{id, text, known_by[], kind, confidence, unlocks[]}` | `kind` is required: `witnessed` or `cover_story`. `id` becomes `source.ref` in every world |
-| `gossip` | `{topics[], pairs_per_round}` | |
+| `gossip` | `{topics[], pairs_per_round}` | `topics` is kept for content but no longer steers selection: a round picks from the speaker's spreadable memories without vector search (one embedding call per team). Each rumour has a fixed id per round and pair |
 
 Rooms avoid the famous board game's names (AGENTS.md rule 22): map room, pantry, scullery, greenhouse, cloakroom, wine cellar.
 
@@ -178,7 +178,7 @@ Rooms avoid the famous board game's names (AGENTS.md rule 22): map room, pantry,
 | Bot `/event` | `events.trigger_event(store, case, event_id)` | `EventResult(event, replaced, notify_teams)` |
 | Bot `/search`, `/discover`, `/notebook` | `actions.search_room`, `actions.discover`, `actions.notebook` | |
 | Bot `/accuse` | `game.accuse(store, case, scope, who, weapon, room)`, `game.is_eliminated(store, scope)` | `AccusationResult(status, message)` |
-| Bot `/round` | `gossip.run_round(store, case, scope, round_no)` per team | rumours written |
+| Bot `/round` | `gossip.run_round(store, case, scope, round_no)` per team | rumours written; a retried round returns the same rumours |
 | `search_memories` | `turn.format_memories(memories)` | memory ids and `[lead: …]` markers for the model |
 | `submit_reply` | `rules.check_decision(store, case, scope, suspect_id, decision)`, then `actions.validate_offer(store, case, scope, suspect_id, turn_id, trace.retrieved, proposed_action, supporting_memory_id)` | `None` or an error for the model; then `OfferDecision(offer, reason)`. Pass `reason` as `traces.complete_turn(..., offer_rejected_reason=...)` |
 

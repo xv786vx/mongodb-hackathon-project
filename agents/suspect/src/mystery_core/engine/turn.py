@@ -18,7 +18,7 @@ from mystery_core.memory.models import Decision, Memory, NewMemory, Scope, Sourc
 
 from . import prompts
 from .case import Case, Suspect
-from .contradiction import apply_contradiction, find_contradiction
+from .contradiction import already_applied, apply_contradiction, find_contradiction
 from .ports import LLM, GameStore
 from .rules import DECISION_GUIDE, allowed_decisions
 
@@ -176,23 +176,15 @@ async def prepare_present(store: GameStore, case: Case, scope: Scope, suspect_id
         return TurnPrep(ok=False, error=f"Your team hasn't found {evidence.name.lower()}.")
 
     already_shown = bool(await store.find_by_ref(scope, suspect.viewer, evidence.id, kinds=["evidence"]))
-
-    # 2. The suspect now remembers being shown it, with the evidence's leads.
-    shown = await store.write(scope, [NewMemory(
-        id=ids.evidence_memory_id(scope.case_id, scope.team_id, suspect_id, evidence.id),
-        text=f"The detectives showed me {evidence.name[0].lower()}{evidence.name[1:]}: {evidence.text}",
-        known_by=[suspect.viewer],
-        kind="evidence",
-        source=Source(type="evidence", ref=evidence.id),
-        unlocks=list(evidence.unlocks),
-    )])
-    fresh: list[Memory] = [m for m in shown if m.status == "active"]
+    fresh: list[Memory] = []
     superseded: list[tuple[str, str]] = []
     note = ""
 
-    # 3-4. Contradiction check, then the policy's on_contradiction.
-    if not already_shown:
-        belief = await find_contradiction(store, scope, suspect, evidence, llm=llm)
+    # 2-3. Contradiction check, then the policy's on_contradiction. Runs before the
+    # evidence memory is written, and is skipped if this evidence already replaced a
+    # belief, so a retry after a partial failure still applies it exactly once.
+    if not already_shown and not await already_applied(store, scope, suspect, evidence):
+        belief = await find_contradiction(store, case, scope, suspect, evidence, llm=llm)
         if belief is not None:
             replacement = await apply_contradiction(store, case, scope, suspect, evidence, belief,
                                                     llm=llm)
@@ -205,8 +197,20 @@ async def prepare_present(store: GameStore, case: Case, scope: Scope, suspect_id
                 else:
                     note = (f"This evidence shows you were wrong to believe "
                             f"\"{belief.text}\" What you believe now is below.")
-    else:
+    elif already_shown:
         note = "You have been shown this before."
+
+    # 4. Last: the suspect now remembers being shown it, with the evidence's leads.
+    # Written last so "already shown" means the whole step finished.
+    shown = await store.write(scope, [NewMemory(
+        id=ids.evidence_memory_id(scope.case_id, scope.team_id, suspect_id, evidence.id),
+        text=f"The detectives showed me {evidence.name[0].lower()}{evidence.name[1:]}: {evidence.text}",
+        known_by=[suspect.viewer],
+        kind="evidence",
+        source=Source(type="evidence", ref=evidence.id),
+        unlocks=list(evidence.unlocks),
+    )])
+    fresh = [m for m in shown if m.status == "active"] + fresh
 
     # 5. Continue as /interrogate, with the fresh memories in the trusted part.
     allowed = await allowed_decisions(store, case, scope, suspect_id)

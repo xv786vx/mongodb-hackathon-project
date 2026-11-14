@@ -55,7 +55,25 @@ def _parse_verdict(raw: str) -> Verdict | None:
         return None
 
 
-async def find_contradiction(store: GameStore, scope: Scope, suspect: Suspect,
+def _is_cover_ref(case: Case, ref: str) -> bool:
+    try:
+        return case.seed(ref).kind == "cover_story"
+    except KeyError:
+        return False
+
+
+async def already_applied(store: GameStore, scope: Scope, suspect: Suspect,
+                          evidence: Evidence) -> bool:
+    """True if this evidence already replaced one of the suspect's beliefs in this world.
+
+    Every replacement made by apply_contradiction carries source.ref = the evidence id,
+    so a /present retried after the supersede (but before the evidence memory was
+    written) does not break the story a second time."""
+    return bool(await store.find_by_ref(scope, suspect.viewer, evidence.id,
+                                        kinds=["witnessed", "cover_story"]))
+
+
+async def find_contradiction(store: GameStore, case: Case, scope: Scope, suspect: Suspect,
                              evidence: Evidence, llm: LLM | None = None) -> Memory | None:
     """Return the suspect's active belief this evidence contradicts, if any."""
     viewer = suspect.viewer
@@ -64,6 +82,13 @@ async def find_contradiction(store: GameStore, scope: Scope, suspect: Suspect,
             hits = await store.find_by_ref(scope, viewer, ref, kinds=BELIEF_KINDS)
             if hits:
                 return hits[0]
+            # Once broken, the killer's story is a fabricated replacement tagged with the
+            # evidence that broke it, not the seed ref. He holds exactly one active cover
+            # story, so find it by kind.
+            if suspect.is_killer and _is_cover_ref(case, ref):
+                covers = await store.list_by_viewer(scope, viewer, kinds=["cover_story"])
+                if covers:
+                    return covers[-1]
         return None
 
     if llm is None:
@@ -91,7 +116,14 @@ async def apply_contradiction(store: GameStore, case: Case, scope: Scope, suspec
     """Supersede `belief` according to the store's policy. Returns the replacement."""
     kind_policy = store.policy.kinds.get(belief.kind)
     rule = kind_policy.on_contradiction if kind_policy else None
-    declared = _clean((evidence.contradicts or {}).get(belief.source.ref or ""))
+    declared_map = evidence.contradicts or {}
+    if belief.source.ref in declared_map:
+        declared = _clean(declared_map[belief.source.ref])
+    elif belief.kind == "cover_story":
+        # A replacement lie: use the text declared against the original cover story.
+        declared = next((_clean(t) for r, t in declared_map.items() if _is_cover_ref(case, r)), None)
+    else:
+        declared = None
     reason = f"contradicted by {evidence.id}"
 
     if rule == "correct":
@@ -114,10 +146,10 @@ async def apply_contradiction(store: GameStore, case: Case, scope: Scope, suspec
             lies = suspect.fallback_lies
             text = lies[min(breaks, len(lies) - 1)] if lies else (
                 "I have told you everything I know. I was where I said I was.")
-        # Keep the lineage root as ref so the next piece of evidence that
-        # contradicts the original cover story also finds this replacement.
+        # Tagged with the evidence that forced it, so a retry can tell this evidence was
+        # already applied (already_applied). find_contradiction finds it by kind later.
         new = NewMemory(text=text, known_by=[suspect.viewer], kind="cover_story",
-                        source=Source(type="fabricated", ref=belief.source.ref),
+                        source=Source(type="fabricated", ref=evidence.id),
                         confidence=1.0)
     else:
         return None

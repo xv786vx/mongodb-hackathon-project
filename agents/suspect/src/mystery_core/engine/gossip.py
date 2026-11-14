@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import random
 
+from mystery_core.memory import ids
 from mystery_core.memory.models import Memory, NewMemory, Scope, Source
 from mystery_core.memory.policy import Policy
 
@@ -33,32 +34,40 @@ def _speakable(policy: Policy, speaker: Suspect) -> list[str]:
 
 
 async def run_round(store: GameStore, case: Case, scope: Scope, round_no: int) -> list[Memory]:
-    """Spread one rumour per selected pair in this world. Deterministic per
-    (case, team, round), so a retried round makes the same choices and the
-    store's dedup absorbs the repeat."""
+    """Spread one rumour per selected pair in this world.
+
+    Deterministic per (case, team, round), and each rumour has a fixed id per
+    (round, speaker, listener), so a retried round returns the rumours it already
+    wrote instead of adding new ones.
+
+    No vector search: the speaker's memory is picked from list_by_viewer, so a round
+    costs one embedding call per team (the batched write). `case.gossip.topics` is
+    not used for selection."""
     policy = store.policy
     decay = policy.kinds["rumour"].confidence_decay or 0.3
     rng = random.Random(f"{case.id}:{scope.team_id}:{round_no}")
-    topics = case.gossip.topics or [case.victim]
+    round_key = f"gossip:{case.id}:{scope.team_id}:{round_no}"
 
     new: list[NewMemory] = []
     for speaker, listener in _pairs(case, rng, case.gossip.pairs_per_round):
-        topic = rng.choice(topics)
         kinds = _speakable(policy, speaker)
         if not kinds:
             continue
-        for m in await store.retrieve(scope, speaker.viewer, topic, k=1, kinds=kinds):
-            if listener.viewer in m.known_by:
-                continue
-            confidence = round(m.confidence * (1 - decay), 3)
-            if confidence < MIN_RUMOUR_CONFIDENCE:
-                continue
-            new.append(NewMemory(
-                text=f"{speaker.name} told me: \"{m.text}\"",
-                known_by=[listener.viewer],
-                kind="rumour",
-                source=Source(type="told_by", ref=speaker.id),
-                confidence=confidence,
-                unlocks=[],
-            ))
+        held = await store.list_by_viewer(scope, speaker.viewer, kinds=kinds)
+        choices = [m for m in held if listener.viewer not in m.known_by]
+        if not choices:
+            continue
+        m = rng.choice(choices)
+        confidence = round(m.confidence * (1 - decay), 3)
+        if confidence < MIN_RUMOUR_CONFIDENCE:
+            continue
+        new.append(NewMemory(
+            id=ids.turn_memory_id(round_key, f"{speaker.id}>{listener.id}"),
+            text=f"{speaker.name} told me: \"{m.text}\"",
+            known_by=[listener.viewer],
+            kind="rumour",
+            source=Source(type="told_by", ref=speaker.id),
+            confidence=confidence,
+            unlocks=[],
+        ))
     return await store.write(scope, new) if new else []

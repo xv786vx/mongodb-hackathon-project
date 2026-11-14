@@ -247,6 +247,12 @@ class Case(BaseModel):
             for ch in ev.changes():
                 if ch.ref not in evidence and ch.ref not in seeds:
                     errors.append(f"event {ev.id}: unknown ref {ch.ref!r}")
+                # The killer's replacement lies carry the evidence id that broke them, so an
+                # event on that evidence would overwrite his current story with event text.
+                ev_doc = next((e for e in self.evidence if e.id == ch.ref), None)
+                cover_seeds = {m.id for m in self.seed_memories if m.kind == "cover_story"}
+                if ev_doc and cover_seeds & set(ev_doc.contradicts or {}):
+                    errors.append(f"event {ev.id}: cannot change {ch.ref!r}, which breaks a cover story")
 
         if errors:
             raise ValueError("invalid case file:\n  " + "\n  ".join(errors))

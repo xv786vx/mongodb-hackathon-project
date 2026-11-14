@@ -128,3 +128,39 @@ async def test_confession_is_never_a_searchable_memory(store, case, A, B):
         assert all(m.text != confession for m in all_in(store, scope))
     msg = (await prepare_interrogate(store, case, A, "butler", "Where is the poker?")).message
     assert confession not in msg
+
+
+async def test_present_retry_after_partial_failure_breaks_the_story_once(store, case, A):
+    await discover(store, case, A, "ev_ledger")
+    real_write = store.write
+
+    async def crash_on_evidence(scope, memories, **kw):
+        if any(m.kind == "evidence" for m in memories):
+            raise RuntimeError("crash after the supersede, before the evidence memory")
+        return await real_write(scope, memories, **kw)
+
+    store.write = crash_on_evidence
+    try:
+        await prepare_present(store, case, A, "butler", "ev_ledger")
+    except RuntimeError:
+        pass
+    store.write = real_write
+    assert await store.count_superseded(A, "suspect:butler", "cover_story") == 1
+
+    retry = await prepare_present(store, case, A, "butler", "ev_ledger")
+    assert retry.ok and retry.superseded == []
+    assert await store.count_superseded(A, "suspect:butler", "cover_story") == 1
+    assert await store.find_by_ref(A, "suspect:butler", "ev_ledger", kinds=["evidence"])
+    assert "crack" not in retry.allowed
+
+
+async def test_second_clue_breaks_the_replacement_lie(store, case, A):
+    # The new lie is tagged with ev_ledger, not the seed ref; ev_glove must still find it.
+    await discover(store, case, A, "ev_ledger")
+    await discover(store, case, A, "ev_glove")
+    first = await prepare_present(store, case, A, "butler", "ev_ledger")
+    assert first.fresh[-1].source.ref == "ev_ledger"
+    second = await prepare_present(store, case, A, "butler", "ev_glove")
+    assert second.superseded and second.superseded[0][0] == first.fresh[-1].id
+    [current] = await store.list_by_viewer(A, "suspect:butler", kinds=["cover_story"])
+    assert current.text == case.suspect("butler").fallback_lies[1]

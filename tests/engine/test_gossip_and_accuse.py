@@ -50,3 +50,21 @@ async def test_accusation(store, case, A, B):
     assert right.status == "solved" and not await is_eliminated(store, A)
     assert (await accuse(store, case, A, "butler", "poker", "office")).status == "already_accused"
     assert (await accuse(store, case, A, "ghost", "poker", "office")).status == "invalid"
+
+
+async def test_retried_round_writes_each_rumour_once(store, case, A):
+    first = await run_round(store, case, A, 2)
+    assert first
+    again = await run_round(store, case, A, 2)
+    assert [m.id for m in again] == [m.id for m in first]
+    assert len(rumours(store, A)) == len(first)
+
+
+async def test_gossip_does_no_vector_search(store, case, A):
+    async def no_search(*a, **k):
+        raise AssertionError("gossip must not call retrieve (one embedding call per pair)")
+    store.retrieve = no_search
+    written = []
+    for r in range(1, 4):
+        written += await run_round(store, case, A, r)
+    assert written
