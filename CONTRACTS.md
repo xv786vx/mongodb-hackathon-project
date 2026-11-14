@@ -34,6 +34,8 @@ await store.supersede(scope, old_id, new: NewMemory, reason) -> Memory
 await store.supersede_by_ref(case_id, ref, replacement_text, event_id, reason) -> list[Memory]   # events.py only
 await store.forget(scope, viewer=None) -> int
 await store.seed_world(case_id, team_id) -> int
+await store.count_superseded(scope, viewer, kind="cover_story") -> int   # crack gate (rule 13) + voice
+await store.watch_expiries(on_expired, worker_id="expiry_notices")       # runs forever; bot starts it as a task
 ```
 
 Differences from ARCHITECTURE.md section 4, on purpose:
@@ -47,7 +49,52 @@ Guarantees:
 - Replacements never inherit `unlocks`. A superseded memory disappears from `retrieve`/`fetch` immediately.
 - Search index lag: don't write then retrieve. Use the memories `write` returns.
 
-Status: `retrieve`, `fetch`, `write`, `seed_world` are live on Atlas. `supersede`, `supersede_by_ref`, `forget` work in `FakeStore`; Atlas versions land in Phase 2/3.
+Status: `retrieve`, `fetch`, `write`, `seed_world`, `count_superseded`, `watch_expiries` are live on Atlas. `supersede`, `supersede_by_ref`, `forget` work in `FakeStore`; Atlas versions land in Phase 2/3.
+
+### Traces (`TraceStoreAPI`; implemented by `TraceStore(db)` and `FakeTraceStore()`)
+
+```python
+traces = TraceStore(client[db_name])
+
+# bot, at the start of a command (after defer). Find-or-create: a retry returns the same trace, input unchanged.
+await traces.begin_turn(scope, turn_id, actor, command, input, *, engine_mode=None, replay_of=None, masked=()) -> Trace
+# bot, after invoke. None for an unknown id OR another team's trace.
+await traces.get_trace(scope, turn_id) -> Trace | None
+# agent tools (Person 2)
+await traces.add_retrieved(scope, turn_id, memory_ids)       # only while pending; idempotent
+await traces.complete_turn(scope, turn_id, *, decision, reply, written=(), offer_id=None, offer_label=None,
+                           offer_rejected_reason=None, model=None, prompt_version=None, execution_id=None) -> Trace
+await traces.reject_turn(scope, turn_id, reason) -> Trace
+# bot, after the clip
+await traces.set_voice(scope, turn_id, voice: dict)
+```
+
+- `pending -> complete` or `pending -> rejected`, nothing else. `complete_turn` on a complete trace returns it unchanged
+  (retry-safe `submit_reply`); on a rejected or missing trace it raises `TraceConflict`.
+- Post only when `trace.status == "complete"`. Use `trace.reply`, `trace.decision`, `trace.offer_id`, `trace.offer_label`.
+- `trace.actor` is `"suspect:<id>"`; `trace.suspect_id` gives `<id>`.
+- `offer_label` is display text copied from `case.actions[].label` by `submit_reply`. The click handler still re-checks the offer and the memory.
+
+### Voice inputs (Person 4)
+
+```python
+mems = await store.fetch(scope, trace.actor, trace.retrieved)
+mean_confidence = sum(m.confidence for m in mems) / len(mems) if mems else 1.0
+breaks = await store.count_superseded(scope, trace.actor, kind="cover_story")
+```
+
+### Expiry notices (Person 4)
+
+```python
+async def on_expired(n: ExpiryNotice) -> None:   # n.case_id, n.team_id, n.memory_id, n.kind
+    ...post a generic message (e.g. "A rumour has faded.") in team n.team_id's channel...
+
+asyncio.create_task(store.watch_expiries(on_expired))
+```
+
+The notice carries IDs and kind only, never memory text: a rumour belongs to a suspect, so its text must not reach the team.
+Deletes by `forget()` are not reported (only memories whose `expires_at` has passed). The watcher writes an `expire`
+audit event and stores its resume token in `worker_state`, so a restart continues where it stopped.
 
 ### Deterministic IDs (`mystery_core.memory.ids`)
 

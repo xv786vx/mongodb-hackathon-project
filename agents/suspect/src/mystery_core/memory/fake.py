@@ -14,8 +14,9 @@ from typing import Any, Iterable
 
 from . import ids as _ids
 from .embeddings import Embedder, FakeEmbedder, cosine
-from .models import AuditEvent, Memory, NewMemory, Scope, validate_viewer
+from .models import AuditEvent, Decision, Memory, NewMemory, Scope, Trace, validate_viewer
 from .policy import DEFAULT_POLICY, Policy, utcnow
+from .traces import TraceConflict, _check_turn_id, _completion_fields
 
 
 class FakeStore:
@@ -173,6 +174,14 @@ class FakeStore:
         )
         return len(self.docs) - before
 
+    async def count_superseded(self, scope: Scope, viewer: str, kind: str = "cover_story") -> int:
+        viewer = validate_viewer(viewer)
+        return sum(
+            1
+            for m in self.docs.values()
+            if m.scope == scope and viewer in m.known_by and m.kind == kind and m.status == "superseded"
+        )
+
     # --- governance ---------------------------------------------------------------
 
     async def supersede(self, scope: Scope, old_id: str, new: NewMemory, reason: str) -> Memory:
@@ -247,3 +256,94 @@ class FakeStore:
             del self.docs[i]
         self._audit("forget", scope.case_id, scope.team_id, [], count=len(doomed))
         return len(doomed)
+
+
+class FakeTraceStore:
+    """In-memory implementation of TraceStoreAPI. Same state rules as TraceStore."""
+
+    def __init__(self) -> None:
+        self.traces: dict[str, Trace] = {}
+
+    def _get(self, scope: Scope, turn_id: str) -> Trace | None:
+        t = self.traces.get(_check_turn_id(turn_id))
+        return t if t is not None and t.scope == scope else None
+
+    async def begin_turn(
+        self,
+        scope: Scope,
+        turn_id: str,
+        actor: str,
+        command: str,
+        input: str,
+        *,
+        engine_mode: str | None = None,
+        replay_of: str | None = None,
+        masked: Iterable[str] = (),
+    ) -> Trace:
+        existing = self.traces.get(_check_turn_id(turn_id))
+        if existing is not None:
+            if existing.scope != scope:
+                raise TraceConflict(f"turn {turn_id} belongs to another world")
+            return existing.model_copy()
+        t = Trace(
+            _id=turn_id, case_id=scope.case_id, team_id=scope.team_id, actor=validate_viewer(actor),
+            command=command, input=input, engine_mode=engine_mode, replay_of=replay_of,
+            masked=list(masked), ts=utcnow(),
+        )
+        self.traces[turn_id] = t
+        return t.model_copy()
+
+    async def get_trace(self, scope: Scope, turn_id: str) -> Trace | None:
+        t = self._get(scope, turn_id)
+        return t.model_copy() if t else None
+
+    async def add_retrieved(self, scope: Scope, turn_id: str, memory_ids: Iterable[str]) -> None:
+        t = self._get(scope, turn_id)
+        if t is not None and t.status == "pending":
+            t.retrieved += [i for i in memory_ids if i not in t.retrieved]
+
+    async def complete_turn(
+        self,
+        scope: Scope,
+        turn_id: str,
+        *,
+        decision: Decision,
+        reply: str,
+        written: Iterable[str] = (),
+        offer_id: str | None = None,
+        offer_label: str | None = None,
+        offer_rejected_reason: str | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        execution_id: str | None = None,
+    ) -> Trace:
+        t = self._get(scope, turn_id)
+        if t is None:
+            raise TraceConflict(f"turn {turn_id} not found; call begin_turn first")
+        if t.status == "complete":
+            return t.model_copy()
+        if t.status != "pending":
+            raise TraceConflict(f"turn {turn_id} is {t.status}")
+        fields = _completion_fields(
+            decision=decision, reply=reply, written=written, offer_id=offer_id, offer_label=offer_label,
+            offer_rejected_reason=offer_rejected_reason, model=model, prompt_version=prompt_version,
+            execution_id=execution_id,
+        )
+        self.traces[turn_id] = t = Trace.model_validate(t.to_doc() | fields)
+        return t.model_copy()
+
+    async def reject_turn(self, scope: Scope, turn_id: str, reason: str) -> Trace:
+        t = self._get(scope, turn_id)
+        if t is None:
+            raise TraceConflict(f"turn {turn_id} not found")
+        if t.status == "rejected":
+            return t.model_copy()
+        if t.status != "pending":
+            raise TraceConflict(f"turn {turn_id} is {t.status}")
+        t.status, t.rejected_reason = "rejected", reason
+        return t.model_copy()
+
+    async def set_voice(self, scope: Scope, turn_id: str, voice: dict[str, Any]) -> None:
+        t = self._get(scope, turn_id)
+        if t is not None:
+            t.voice = voice

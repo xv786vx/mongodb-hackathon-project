@@ -146,7 +146,10 @@ class Trace(_Doc):
     reply: str | None = None
     written: list[str] = Field(default_factory=list)
     offer_id: str | None = None
+    # Display text for the offer button, copied from case.actions[].label. Not authority: clicks re-check.
+    offer_label: str | None = None
     offer_rejected_reason: str | None = None
+    rejected_reason: str | None = None
     engine_mode: Literal["hosted", "local"] | None = None
     execution_id: str | None = None
     model: str | None = None
@@ -155,6 +158,25 @@ class Trace(_Doc):
     replay_of: str | None = None
     masked: list[str] = Field(default_factory=list)
     ts: datetime
+
+    @property
+    def scope(self) -> Scope:
+        return Scope(case_id=self.case_id, team_id=self.team_id)
+
+    @property
+    def suspect_id(self) -> str:
+        """'suspect:butler' -> 'butler'."""
+        return self.actor.split(":", 1)[1]
+
+
+class ExpiryNotice(BaseModel):
+    """Passed to the bot's on_expired callback when a memory expires. IDs only, never memory text:
+    a rumour belongs to a suspect, not the team, so its text must not be posted."""
+
+    case_id: str
+    team_id: str
+    memory_id: str
+    kind: Kind
 
 
 class Offer(_Doc):

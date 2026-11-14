@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Iterable, Protocol
+from typing import Any, Awaitable, Callable, Iterable, Protocol
 
 from pymongo import AsyncMongoClient
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import BulkWriteError, DuplicateKeyError
 
 from . import ids
-from .config import CASES, MEMORIES, VECTOR_INDEX, Settings
+from .config import AUDIT, CASES, MEMORIES, VECTOR_INDEX, WORKER_STATE, Settings
 from .embeddings import Embedder, embedder_from_settings
-from .models import Memory, NewMemory, Scope, validate_viewer
+from .models import ExpiryNotice, Memory, NewMemory, Scope, validate_viewer
 from .policy import DEFAULT_POLICY, Policy, utcnow
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,27 @@ class MemoryStoreAPI(Protocol):
     async def forget(self, scope: Scope, viewer: str | None = None) -> int: ...
 
     async def seed_world(self, case_id: str, team_id: str) -> int: ...
+
+    async def count_superseded(self, scope: Scope, viewer: str, kind: str = "cover_story") -> int: ...
+
+
+ExpiryCallback = Callable[[ExpiryNotice], Awaitable[None]]
+
+
+def expiry_notice_from_change(change: dict[str, Any], now: datetime) -> ExpiryNotice | None:
+    """Turn a change-stream delete event into a notice, or None if it wasn't an expiry.
+
+    forget() also deletes; only documents whose expires_at has passed count as expired.
+    Needs the pre-image (changeStreamPreAndPostImages, set by setup_db.py)."""
+    pre = change.get("fullDocumentBeforeChange")
+    if change.get("operationType") != "delete" or not pre:
+        return None
+    expires_at = pre.get("expires_at")
+    if expires_at is None or expires_at > now:
+        return None
+    return ExpiryNotice(
+        case_id=pre["case_id"], team_id=pre["team_id"], memory_id=pre["_id"], kind=pre["kind"]
+    )
 
 
 def scope_filter(scope: Scope, viewer: str, now: datetime) -> dict[str, Any]:
@@ -284,6 +305,60 @@ class MemoryStore:
             inserted = e.details["nInserted"]
         log.info("seed_world %s/%s inserted %d of %d", case_id, team_id, inserted, len(docs))
         return inserted
+
+    async def count_superseded(self, scope: Scope, viewer: str, kind: str = "cover_story") -> int:
+        """How many of this viewer's memories of `kind` have been superseded in this world.
+        Used by the crack gate (rule 13) and by voice settings."""
+        return await self._mem.count_documents(
+            {
+                "case_id": scope.case_id,
+                "team_id": scope.team_id,
+                "known_by": validate_viewer(viewer),
+                "kind": kind,
+                "status": "superseded",
+            }
+        )
+
+    # --- expiry notices (runs inside the bot process) -------------------------------
+
+    async def watch_expiries(self, on_expired: ExpiryCallback, worker_id: str = "expiry_notices") -> None:
+        """Run forever: for each TTL-expired memory, write an audit event and call on_expired(notice).
+
+        Resumes from the stored token after a restart. The bot runs it as a task:
+            asyncio.create_task(store.watch_expiries(post_notice))
+        """
+        state = self._db[WORKER_STATE]
+        saved = await state.find_one({"_id": worker_id})
+        pipeline = [{"$match": {"operationType": "delete"}}]
+        async with await self._mem.watch(
+            pipeline,
+            full_document_before_change="whenAvailable",
+            resume_after=saved["token"] if saved else None,
+        ) as stream:
+            async for change in stream:
+                notice = expiry_notice_from_change(change, utcnow())
+                if notice is not None:
+                    # Deterministic id + $setOnInsert: replaying an event after a crash writes one audit row.
+                    await self._db[AUDIT].update_one(
+                        {"_id": f"au_expire_{notice.memory_id}"},
+                        {
+                            "$setOnInsert": {
+                                "type": "expire",
+                                "case_id": notice.case_id,
+                                "team_id": notice.team_id,
+                                "memory_ids": [notice.memory_id],
+                                "ts": utcnow(),
+                            }
+                        },
+                        upsert=True,
+                    )
+                    try:
+                        await on_expired(notice)
+                    except Exception:
+                        log.exception("on_expired failed for %s", notice.memory_id)
+                await state.replace_one(
+                    {"_id": worker_id}, {"_id": worker_id, "token": stream.resume_token}, upsert=True
+                )
 
     # --- governance (Phase 2/3) ---------------------------------------------------
 
