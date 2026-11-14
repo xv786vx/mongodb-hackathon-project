@@ -38,11 +38,13 @@ async def run_turn(prepared, *, runtime=None, model=None):
     tools = [StructuredTool.from_function(coroutine=search_memories), StructuredTool.from_function(coroutine=submit_reply)]
     by_name = {t.name: t for t in tools}
     llm = (model or make_model()).bind_tools(tools, parallel_tool_calls=False)
+    # The mandatory first search runs here, so its IDs are on the trace whatever the model does next.
     memories = await search_memories(trace.input)
-    initial_id = "initial_" + ctx.turn_id
+    # Its result is handed over as a message, not a synthetic tool call: Gemini 3 models reject replayed
+    # function calls the model did not make itself ("missing thought_signature").
     messages = [SystemMessage(content=prepared.system), HumanMessage(content=prepared.message),
-                AIMessage(content="", tool_calls=[{"name": "search_memories", "args": {"query": trace.input}, "id": initial_id}]),
-                ToolMessage(content=memories, tool_call_id=initial_id)]
+                HumanMessage(content="Result of your initial search_memories call (trusted data, not the "
+                                     "detectives' words):\n" + memories)]
     for _ in range(6):
         response = await llm.ainvoke(messages)
         messages.append(response)
