@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from mystery_core.engine.context import HEADER_NAMES, TurnContext, TurnError
@@ -84,6 +84,8 @@ async def test_graph_discards_prior_chat_and_posts_only_validated_trace(graph_mo
                                              AIMessage(content="The gardener's old note unlocks the cellar.")]})
     assert "STALE SECRET" not in str(model.inputs)
     assert "old note unlocks" not in str(model.inputs)
+    assert isinstance(model.inputs[0][-1], HumanMessage)
+    assert not any(isinstance(m, (AIMessage, ToolMessage)) for m in model.inputs[0])
     trace = await runtime.traces.get_trace(ctx.scope, ctx.turn_id)
     assert trace.status == "complete" and trace.retrieved
     assert state["messages"][-1].content == trace.reply
@@ -97,6 +99,17 @@ async def test_graph_allows_correcting_a_refused_confession(graph_module, agent_
     await graph.ainvoke({"messages": []})
     trace = await runtime.traces.get_trace(ctx.scope, ctx.turn_id)
     assert trace.decision == "deflect" and "decision_not_allowed" in str(model.inputs[-1])
+
+
+async def test_graph_preserves_model_tool_call_metadata(graph_module, agent_runtime, monkeypatch):
+    runtime, ctx = agent_runtime
+    search = AIMessage(content="", tool_calls=[{
+        "name": "search_memories", "args": {"query": "pantry"}, "id": "gemini-call"}],
+        additional_kwargs={"__gemini_function_call_thought_signatures__": {"gemini-call": "signature"}})
+    model = ScriptedModel([search, submitted()])
+    graph = await configured_graph(graph_module, runtime, ctx, model, monkeypatch, [])
+    await graph.ainvoke({"messages": []})
+    assert any(m is search for m in model.inputs[1])
 
 
 async def test_graph_rejects_raw_unsubmitted_output(graph_module, agent_runtime, monkeypatch):
@@ -127,6 +140,8 @@ async def test_local_fallback_uses_same_validation(agent_runtime):
     model = ScriptedModel([submitted("[laughs] Saved locally.")])
     result = await run_turn(prepared, runtime=runtime, model=model)
     assert result.reply == "Saved locally." and result.status == "complete" and result.retrieved
+    assert isinstance(model.inputs[0][-1], HumanMessage)
+    assert not any(isinstance(m, (AIMessage, ToolMessage)) for m in model.inputs[0])
 
 
 async def test_hosted_client_header_body_and_service_account_contract(agent_runtime, monkeypatch):
