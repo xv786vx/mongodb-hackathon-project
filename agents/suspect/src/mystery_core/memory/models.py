@@ -186,6 +186,8 @@ class Offer(_Doc):
     team_id: str
     action: str
     supported_by: str
+    # The suspect viewer holding the supporting memory, so a click re-checks with one scoped fetch.
+    held_by: str
     offered_in: str
     status: OfferStatus = "offered"
     ts: datetime

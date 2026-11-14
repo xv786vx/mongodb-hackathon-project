@@ -110,5 +110,77 @@ async def test_get_case_hides_truth_and_embeddings(store):
 
 
 async def test_get_truth_only_returns_truth(store):
-    assert await store.get_truth("case_test") == {"killer": "butler", "weapon": "candlestick", "room": "library"}
+    assert await store.get_truth("case_test") == {"killer": "butler", "weapon": "fire_poker", "room": "boathouse"}
     assert await store.get_truth("case_nope") is None
+
+
+# --- seed validation, engine reads, offers, accusations, audit ------------------------
+
+import pytest
+
+from mystery_core.memory import AuditEvent, FakeStore, Offer
+from mystery_core.memory.store import check_seed_memories
+
+
+def test_seed_without_kind_fails_loudly():
+    with pytest.raises(ValueError, match="s2: kind None"):
+        check_seed_memories("case_x", [
+            {"id": "s1", "text": "t", "kind": "witnessed", "known_by": ["suspect:cook"]},
+            {"id": "s2", "text": "t", "known_by": ["suspect:cook"]},
+        ])
+
+
+async def test_seed_world_rejects_bad_case(mini_case):
+    del mini_case["seed_memories"][0]["kind"]
+    with pytest.raises(ValueError, match="kind"):
+        await FakeStore(cases={"case_test": mini_case}).seed_world("case_test", "A")
+
+
+async def test_find_by_ref_and_list_by_viewer_are_scoped(store, team_a, team_b):
+    await store.write(team_a, [NewMemory(id=finding_id("case_test", "A", "ev_note"), text="note",
+                                         known_by=["team:A"], kind="finding", source={"type": "evidence", "ref": "ev_note"})])
+    assert [m.id for m in await store.find_by_ref(team_a, "team:A", "ev_note")] == ["m_find_test_A_ev_note"]
+    assert await store.find_by_ref(team_b, "team:B", "ev_note") == []
+    assert await store.find_by_ref(team_a, "team:A", "ev_note", kinds=["evidence"]) == []
+    cook = await store.list_by_viewer(team_a, COOK)
+    assert {m.id for m in cook} == {"m_test_A_s_cook_footsteps", "m_test_A_s_cook_silver"}
+    assert await store.list_by_viewer(team_a, COOK, kinds=["cover_story"]) == []
+
+
+def _offer(team="A"):
+    return Offer(_id=f"a_{team}_search_cellar_m_1", case_id="case_test", team_id=team, action="search_cellar",
+                 supported_by="m_1", held_by="suspect:butler", offered_in="t_1", ts=utcnow())
+
+
+async def test_offers_insert_once_and_transition_atomically(store, team_a, team_b):
+    first = await store.insert_offer(_offer())
+    again = await store.insert_offer(_offer().model_copy(update={"offered_in": "t_2"}))
+    assert again.offered_in == first.offered_in == "t_1"
+    assert not await store.action_used(team_a, "search_cellar")
+    assert await store.transition_offer(first.id, "offered", "used") is True
+    assert await store.transition_offer(first.id, "offered", "used") is False  # double click
+    assert await store.action_used(team_a, "search_cellar")
+    assert not await store.action_used(team_b, "search_cellar")
+    assert (await store.get_offer(first.id)).status == "used"
+    assert await store.get_offer("a_nope") is None
+
+
+async def test_one_accusation_per_team(store, team_a, team_b):
+    assert await store.record_accusation(team_a, {"correct": False}) is True
+    assert await store.record_accusation(team_a, {"correct": True}) is False
+    assert await store.get_accusation(team_a) == {"correct": False}
+    assert await store.get_accusation(team_b) is None
+
+
+async def test_log_audit_is_idempotent(store):
+    e = AuditEvent(_id="au_x", type="leak_test", case_id="case_test", ts=utcnow())
+    await store.log_audit(e)
+    await store.log_audit(e)
+    assert sum(1 for a in store.audit if a.id == "au_x") == 1
+
+
+async def test_forget_one_viewer(store, team_a, team_b):
+    assert await store.forget(team_a, COOK) == 2
+    assert await store.list_by_viewer(team_a, COOK) == []
+    assert len(await store.list_by_viewer(team_b, COOK)) == 2
+    assert store.audit[-1].type == "forget" and store.audit[-1].count == 2

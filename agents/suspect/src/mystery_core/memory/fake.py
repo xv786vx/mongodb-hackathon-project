@@ -15,8 +15,9 @@ from typing import Any, Iterable
 
 from . import ids as _ids
 from .embeddings import Embedder, FakeEmbedder, cosine
-from .models import AuditEvent, Decision, Memory, NewMemory, Scope, Trace, validate_viewer
+from .models import AuditEvent, Decision, Memory, NewMemory, Offer, OfferStatus, Scope, Trace, validate_viewer
 from .policy import DEFAULT_POLICY, Policy, utcnow
+from .store import check_seed_memories
 from .traces import TraceConflict, _check_turn_id, _completion_fields
 
 
@@ -32,6 +33,8 @@ class FakeStore:
         self.cases = cases or {}
         self.docs: dict[str, Memory] = {}  # includes embeddings
         self.audit: list[AuditEvent] = []
+        self.offers: dict[str, Offer] = {}
+        self.accusations: dict[tuple[str, str], dict[str, Any]] = {}
         self._embedder = embedder or FakeEmbedder()
         self._policy = policy
         self._rumour_ttl = rumour_ttl_seconds
@@ -155,6 +158,7 @@ class FakeStore:
         case = self.cases.get(case_id)
         if case is None:
             raise KeyError(f"case {case_id} not found")
+        check_seed_memories(case_id, case.get("seed_memories", []))
         scope = Scope(case_id=case_id, team_id=team_id)
         before = len(self.docs)
         await self.write(
@@ -182,6 +186,69 @@ class FakeStore:
             for m in self.docs.values()
             if m.scope == scope and viewer in m.known_by and m.kind == kind and m.status == "superseded"
         )
+
+    @property
+    def policy(self) -> Policy:
+        return self._policy
+
+    # --- engine reads (GameStore) -------------------------------------------------------
+
+    async def find_by_ref(
+        self, scope: Scope, viewer: str, ref: str, kinds: Iterable[str] | None = None
+    ) -> list[Memory]:
+        viewer, now, kinds = validate_viewer(viewer), self.now(), set(kinds) if kinds else None
+        return [
+            self._public(m)
+            for m in self.docs.values()
+            if self._visible(m, scope, viewer, now) and m.source.ref == ref and (kinds is None or m.kind in kinds)
+        ]
+
+    async def list_by_viewer(self, scope: Scope, viewer: str, kinds: Iterable[str] | None = None) -> list[Memory]:
+        viewer, now, kinds = validate_viewer(viewer), self.now(), set(kinds) if kinds else None
+        hits = [
+            m for m in self.docs.values()
+            if self._visible(m, scope, viewer, now) and (kinds is None or m.kind in kinds)
+        ]
+        return [self._public(m) for m in sorted(hits, key=lambda m: m.created_at)]
+
+    # --- offers -----------------------------------------------------------------------
+
+    async def get_offer(self, offer_id: str) -> Offer | None:
+        o = self.offers.get(offer_id)
+        return o.model_copy() if o else None
+
+    async def insert_offer(self, offer: Offer) -> Offer:
+        return self.offers.setdefault(offer.id, offer.model_copy()).model_copy()
+
+    async def transition_offer(self, offer_id: str, from_status: OfferStatus, to_status: OfferStatus) -> bool:
+        o = self.offers.get(offer_id)
+        if o is None or o.status != from_status:
+            return False
+        o.status = to_status
+        return True
+
+    async def action_used(self, scope: Scope, action: str) -> bool:
+        return any(
+            o.case_id == scope.case_id and o.team_id == scope.team_id and o.action == action and o.status == "used"
+            for o in self.offers.values()
+        )
+
+    # --- accusations / audit ------------------------------------------------------------
+
+    async def record_accusation(self, scope: Scope, result: dict[str, Any]) -> bool:
+        key = (scope.case_id, scope.team_id)
+        if key in self.accusations:
+            return False
+        self.accusations[key] = copy.deepcopy(result)
+        return True
+
+    async def get_accusation(self, scope: Scope) -> dict[str, Any] | None:
+        r = self.accusations.get((scope.case_id, scope.team_id))
+        return copy.deepcopy(r) if r is not None else None
+
+    async def log_audit(self, event: AuditEvent) -> None:
+        if all(e.id != event.id for e in self.audit):
+            self.audit.append(event)
 
     # --- cases ---------------------------------------------------------------------
 

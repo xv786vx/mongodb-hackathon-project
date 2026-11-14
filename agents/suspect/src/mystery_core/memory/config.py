@@ -13,6 +13,7 @@ TRACES = "traces"
 OFFERS = "offers"
 AUDIT = "audit"
 WORKER_STATE = "worker_state"
+ACCUSATIONS = "accusations"
 VECTOR_INDEX = "memory_index"
 
 

@@ -23,7 +23,7 @@ async def main() -> None:
     ap.add_argument("-k", type=int, default=5)
     args = ap.parse_args()
 
-    store = MemoryStore.from_settings(Settings.from_env())
+    store = await MemoryStore.open(Settings.from_env())
     hits = await store.retrieve(Scope(case_id=args.case_id, team_id=args.team_id), args.viewer, args.query, k=args.k)
     if not hits:
         print("No memories returned. (Is the vector index READY? Was this world seeded?)")

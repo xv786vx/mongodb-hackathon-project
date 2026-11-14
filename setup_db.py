@@ -17,10 +17,12 @@ sys.path.insert(0, str(Path(__file__).parent / "agents" / "suspect" / "src"))
 
 from dotenv import load_dotenv
 from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.operations import SearchIndexModel
 
 from mystery_core.memory.config import (
+    ACCUSATIONS,
     AUDIT,
     CASES,
     MEMORIES,
@@ -114,23 +116,43 @@ def ensure_plain(db: Database, names: list[str]) -> None:
             print(f"  {name}: created")
 
 
+# Index options that matter when deciding whether an existing index is "the same".
+_COMPARED_OPTIONS = ("expireAfterSeconds", "unique", "sparse", "partialFilterExpression")
+
+
+def ensure_index(coll: Collection, keys: list[tuple[str, int]], name: str, **opts) -> None:
+    """Create the index, replacing any existing index on the same keys that has a different name or options.
+
+    MongoDB refuses a second index on identical keys, so an index created by hand (e.g. `expires_at_1` without TTL
+    from Data Explorer) would otherwise make setup fail."""
+    wanted_key = dict(keys)
+    for existing in coll.list_indexes():
+        if existing["name"] == "_id_" or dict(existing["key"]) != wanted_key:
+            continue
+        same_opts = all(existing.get(o) == opts.get(o) for o in _COMPARED_OPTIONS)
+        if existing["name"] == name and same_opts:
+            return
+        coll.drop_index(existing["name"])
+        print(f"  {coll.name}: dropped index {existing['name']} (replaced by {name})")
+    coll.create_index(keys, name=name, **opts)
+
+
 def ensure_indexes(db: Database) -> None:
     mem = db[MEMORIES]
-    mem.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, name="ttl_expires_at")
-    mem.create_index(
+    ensure_index(mem, [("expires_at", ASCENDING)], "ttl_expires_at", expireAfterSeconds=0)
+    ensure_index(
+        mem,
         [("case_id", ASCENDING), ("team_id", ASCENDING), ("known_by", ASCENDING), ("status", ASCENDING)],
-        name="scope_viewer_status",
+        "scope_viewer_status",
     )
-    mem.create_index(
-        [("case_id", ASCENDING), ("source.ref", ASCENDING), ("status", ASCENDING)], name="case_ref_status"
+    ensure_index(mem, [("case_id", ASCENDING), ("source.ref", ASCENDING), ("status", ASCENDING)], "case_ref_status")
+    ensure_index(db[TRACES], [("case_id", ASCENDING), ("team_id", ASCENDING), ("ts", DESCENDING)], "scope_ts")
+    ensure_index(
+        db[OFFERS],
+        [("case_id", ASCENDING), ("team_id", ASCENDING), ("action", ASCENDING), ("status", ASCENDING)],
+        "scope_action_status",
     )
-    db[TRACES].create_index(
-        [("case_id", ASCENDING), ("team_id", ASCENDING), ("ts", DESCENDING)], name="scope_ts"
-    )
-    db[OFFERS].create_index(
-        [("case_id", ASCENDING), ("team_id", ASCENDING), ("status", ASCENDING)], name="scope_status"
-    )
-    db[AUDIT].create_index([("case_id", ASCENDING), ("ts", DESCENDING)], name="case_ts")
+    ensure_index(db[AUDIT], [("case_id", ASCENDING), ("ts", DESCENDING)], "case_ts")
     print("  regular + TTL indexes: ok")
 
 
@@ -182,7 +204,7 @@ def main() -> None:
     db = client[args.db]
     print(f"Setting up {args.db} (EMBEDDING_DIMS={dims})")
     ensure_memories(db, dims)
-    ensure_plain(db, [CASES, POLICIES, TRACES, OFFERS, AUDIT, WORKER_STATE])
+    ensure_plain(db, [CASES, POLICIES, TRACES, OFFERS, AUDIT, WORKER_STATE, ACCUSATIONS])
     ensure_indexes(db)
     db[POLICIES].replace_one({"_id": DEFAULT_POLICY.id}, DEFAULT_POLICY.to_doc(), upsert=True)
     print(f"  policy {DEFAULT_POLICY.id}: upserted")

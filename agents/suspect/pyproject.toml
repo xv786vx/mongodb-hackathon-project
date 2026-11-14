@@ -17,3 +17,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Prompt templates are loaded at runtime; without this the deployed agent can't find them.
+[tool.setuptools.package-data]
+"mystery_core.engine.prompts" = ["*.txt"]

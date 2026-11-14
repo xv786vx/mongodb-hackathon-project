@@ -24,7 +24,7 @@ Viewers are strings: `suspect:<id>` or `team:<id>` (`suspect_viewer()`, `team_vi
 ### Store API (`MemoryStoreAPI`; implemented by `MemoryStore` and `FakeStore`)
 
 ```python
-store = MemoryStore.from_settings(Settings.from_env())    # Atlas
+store = await MemoryStore.open(Settings.from_env())        # Atlas; loads the policy from `policies`
 store = FakeStore(cases={"case_x": case_dict})             # in-memory, for unit tests and stubs
 
 await store.retrieve(scope, viewer, query, k=5, kinds=None, mask=None) -> list[Memory]
@@ -38,7 +38,22 @@ await store.count_superseded(scope, viewer, kind="cover_story") -> int   # crack
 await store.watch_expiries(on_expired, worker_id="expiry_notices")       # runs forever; bot starts it as a task
 await store.get_case(case_id) -> dict | None     # case WITHOUT truth and seed embeddings; cacheable per case_id
 await store.get_truth(case_id) -> dict | None    # {killer, weapon, room}; engine/game.py ONLY (rule 5)
+store.policy -> Policy                           # loaded from the database (policy as data)
+
+# GameStore functions for the engine (Person 3)
+await store.find_by_ref(scope, viewer, ref, kinds=None) -> list[Memory]   # active, scoped, source.ref == ref
+await store.list_by_viewer(scope, viewer, kinds=None) -> list[Memory]     # active, scoped, oldest first
+await store.get_offer(offer_id) -> Offer | None
+await store.insert_offer(offer) -> Offer           # returns the existing offer on a duplicate _id
+await store.transition_offer(offer_id, from_status, to_status) -> bool   # one atomic update; True only for the winner
+await store.action_used(scope, action) -> bool
+await store.record_accusation(scope, result: dict) -> bool   # one per team; False if already recorded
+await store.get_accusation(scope) -> dict | None
+await store.log_audit(event: AuditEvent)            # IDs only; idempotent on event.id
 ```
+
+`Offer.held_by` is the suspect viewer holding the supporting memory; a click re-checks with
+`store.fetch(scope, offer.held_by, [offer.supported_by])`.
 
 Differences from ARCHITECTURE.md section 4, on purpose:
 - `supersede` takes `scope`: the old memory must be in that world, so a caller can't supersede across worlds by id.
@@ -50,8 +65,12 @@ Guarantees:
 - `retrieve`/`fetch` never return embeddings. `score` is set by `retrieve` only.
 - Replacements never inherit `unlocks`. A superseded memory disappears from `retrieve`/`fetch` immediately.
 - Search index lag: don't write then retrieve. Use the memories `write` returns.
+- `supersede` is one transaction (old -> superseded, replacement inserted, audit). Repeat returns the same replacement;
+  `KeyError` if the memory isn't in this world, `ValueError` if it was superseded by something else.
+- `supersede_by_ref` skips worlds already superseded, so a repeat returns `[]`.
+- Seed memories must have `id`, `text`, `kind` and `known_by`; `seed_world` raises a `ValueError` listing every problem.
 
-Status: `retrieve`, `fetch`, `write`, `seed_world`, `count_superseded`, `watch_expiries`, `get_case`, `get_truth` are live on Atlas. `supersede`, `supersede_by_ref`, `forget` work in `FakeStore`; Atlas versions land in Phase 2/3.
+Status: everything above is live on Atlas and in `FakeStore`. `pytest -m atlas tests/test_isolation.py` checks it on Atlas.
 
 ### Traces (`TraceStoreAPI`; implemented by `TraceStore(db)` and `FakeTraceStore()`)
 
@@ -113,7 +132,9 @@ audit event and stores its resume token in `worker_state`, so a restart continue
 ### Database
 
 `python setup_db.py` (idempotent) creates `memories` (validator, pre-images, TTL), `cases`, `policies`, `traces`, `offers`, `audit`, `worker_state`, the indexes, `memory_index`, and the `mystery_v1` policy.
-`python -m scripts.seed <case.json> --teams A B` embeds seed memories once and seeds worlds.
+`python -m scripts.seed --case case_manor --teams A B` embeds the seed memories of a case already in Atlas (sets only
+`seed_memories.$.embedding`) and seeds worlds. `--file <case.json>` loads from a file and refuses to overwrite an existing
+case without `--replace`.
 `python -m scripts.try_retrieve <case_id> <team> <viewer> "<query>"` checks retrieval.
 
 ## Agent Engine (Person 2)
