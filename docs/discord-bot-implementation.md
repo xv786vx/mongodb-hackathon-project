@@ -562,12 +562,9 @@ proposals until they are written into `CONTRACTS.md`.
 | Case file with `suspects[].voice_id`, `actions[].label`, `events` | 3 | proposed | |
 | `store.setup_db` and seed on Cluster0 | 1 | agreed | Works on person 1's M10. Cluster0 after person 3's case file merges. Until then use `FakeStore` or `EMBEDDING_MODEL=fake` with your own `DB_NAME`. |
 
-**Sync or async: unresolved.** Person 3's engine functions are all synchronous and need a PyMongo
-`MongoClient` store, which they say cannot be an `AsyncMongoClient`. Person 1's store and traces are
-`async` (`AsyncMongoClient`). Until those two agree, the real adapter can't be written. The bot's
-`Engine` interface (`bot/engine_api.py`) hides the difference: it calls everything through
-`asyncio.to_thread`, and an adapter can `asyncio.run_coroutine_threadsafe` into the bot's loop for
-anything that turns out to be async.
+**Async (decided with person 3).** The engine and the stores are all `async`, so the bot awaits them directly
+and does not use `asyncio.to_thread` for engine calls. Only `case_info()` is synchronous, because the adapter loads the
+case once at startup. Sections 3, 6 and 8 still show the older threaded form in their samples.
 
 **Two steps, two owners.** `traces.begin_turn` (person 1) creates the trace. The turn message with
 the character sheet, allowed decisions and any `/present` evidence comes from person 3's builder.

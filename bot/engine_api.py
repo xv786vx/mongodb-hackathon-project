@@ -1,8 +1,9 @@
 """What the bot needs from the game engine.
 
-Shapes follow person 3's entry points (mystery_core.engine) and person 1's traces. Every method
-is synchronous; the bot calls them through asyncio.to_thread. The real adapter (not written yet)
-maps each method onto the engine functions listed beside it. FakeEngine implements all of it.
+Shapes follow person 3's entry points (mystery_core.engine) and person 1's traces. Everything is
+async (decided with person 3): the bot awaits each call directly. `case_info` stays synchronous because the
+adapter loads the case once at startup. The real adapter (not written yet) maps each method onto the engine
+functions listed beside it. FakeEngine implements all of it.
 """
 from __future__ import annotations
 
@@ -110,23 +111,23 @@ class AccusationResult:                  # game.accuse
 
 class Engine(Protocol):
     def case_info(self) -> CaseInfo: ...                                      # load_case, once
-    def team_findings(self, team_id: str) -> list[Evidence]: ...              # actions.team_findings
-    def recent_turns(self, team_id: str, suspect_id: str) -> list[dict]: ...  # traces: {input, reply}
-    def prepare_interrogate(self, team_id: str, suspect_id: str, question: str,
+    async def team_findings(self, team_id: str) -> list[Evidence]: ...              # actions.team_findings
+    async def recent_turns(self, team_id: str, suspect_id: str) -> list[dict]: ...  # traces: {input, reply}
+    async def prepare_interrogate(self, team_id: str, suspect_id: str, question: str,
                             recent: list[dict]) -> TurnPrep: ...
-    def prepare_present(self, team_id: str, suspect_id: str, evidence_id: str, question: str,
+    async def prepare_present(self, team_id: str, suspect_id: str, evidence_id: str, question: str,
                         recent: list[dict]) -> TurnPrep: ...                  # always llm=None
-    def begin_turn(self, team_id: str, suspect_id: str, turn_id: str, command: str, question: str,
+    async def begin_turn(self, team_id: str, suspect_id: str, turn_id: str, command: str, question: str,
                    prep: TurnPrep) -> Prepared: ...                           # traces.begin_turn
-    def generate(self, prepared: Prepared) -> None: ...                       # local runner or invoke.py
-    def get_trace(self, team_id: str, turn_id: str) -> Trace | None: ...      # traces.get_trace
-    def use_offer(self, team_id: str, offer_id: str) -> OfferResult: ...
-    def trigger_event(self, event_id: str) -> EventResult: ...
-    def search_room(self, team_id: str, room_id: str) -> SearchResult: ...
-    def discover(self, team_id: str, evidence_id: str) -> Found: ...
-    def notebook(self, team_id: str, query: str) -> list[str]: ...
-    def accuse(self, team_id: str, who: str, weapon: str, room: str) -> AccusationResult: ...
-    def run_round(self, team_id: str, round_no: int) -> int: ...              # post nothing about content
-    def is_eliminated(self, team_id: str) -> bool: ...
-    def voice_inputs(self, team_id: str, trace: "Trace") -> tuple[float, int]: ...   # (mean confidence, cover breaks)
-    def record_voice(self, team_id: str, turn_id: str, voice: dict) -> None: ...      # traces.set_voice
+    async def generate(self, prepared: Prepared) -> None: ...                       # local runner or invoke.py
+    async def get_trace(self, team_id: str, turn_id: str) -> Trace | None: ...      # traces.get_trace
+    async def use_offer(self, team_id: str, offer_id: str) -> OfferResult: ...
+    async def trigger_event(self, event_id: str) -> EventResult: ...
+    async def search_room(self, team_id: str, room_id: str) -> SearchResult: ...
+    async def discover(self, team_id: str, evidence_id: str) -> Found: ...
+    async def notebook(self, team_id: str, query: str) -> list[str]: ...
+    async def accuse(self, team_id: str, who: str, weapon: str, room: str) -> AccusationResult: ...
+    async def run_round(self, team_id: str, round_no: int) -> int: ...              # post nothing about content
+    async def is_eliminated(self, team_id: str) -> bool: ...
+    async def voice_inputs(self, team_id: str, trace: "Trace") -> tuple[float, int]: ...   # (mean confidence, cover breaks)
+    async def record_voice(self, team_id: str, turn_id: str, voice: dict) -> None: ...      # traces.set_voice

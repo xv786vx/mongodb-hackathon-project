@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from bot.config import Settings
@@ -28,74 +30,80 @@ def test_host_check():
         require_host(CFG, {1})
 
 
-def ask(e, team, turn, q="where were you after midnight?", suspect="butler"):
-    prep = e.prepare_interrogate(team, suspect, q, [])
-    p = e.begin_turn(team, suspect, turn, "interrogate", q, prep)
-    e.generate(p)
-    return e.get_trace(team, turn)
+async def ask(e, team, turn, q="where were you after midnight?", suspect="butler"):
+    prep = await e.prepare_interrogate(team, suspect, q, [])
+    p = await e.begin_turn(team, suspect, turn, "interrogate", q, prep)
+    await e.generate(p)
+    return await e.get_trace(team, turn)
 
 
-def stage_team_a(e):
-    e.discover("A", "ev_note")
-    assert e.prepare_present("A", "butler", "ev_note", "", []).ok
+async def stage_team_a(e):
+    await e.discover("A", "ev_note")
+    assert (await e.prepare_present("A", "butler", "ev_note", "", [])).ok
 
 
-def test_core_demo():
+async def test_core_demo():
     e = FakeEngine()
-    stage_team_a(e)
-    offer = ask(e, "A", "t_1").offer_id
+    await stage_team_a(e)
+    offer = (await ask(e, "A", "t_1")).offer_id
     assert offer is not None
-    assert ask(e, "B", "t_2").offer_id is None                  # Team B has no live lead
-    assert e.use_offer("B", offer).status == "forbidden"
-    result = e.trigger_event("gardener_recants")
+    assert (await ask(e, "B", "t_2")).offer_id is None                  # Team B has no live lead
+    assert (await e.use_offer("B", offer)).status == "forbidden"
+    result = await e.trigger_event("gardener_recants")
     assert result.notify_teams == ("A",) and result.notice == EVENT_NOTICE   # Team B is not told
-    assert e.use_offer("A", offer).status == "rejected"
-    assert ask(e, "A", "t_3").offer_id is None                  # a fresh question offers nothing
-    assert not e.prepare_present("A", "butler", "ev_note", "", []).ok       # withdrawn evidence cannot return
+    assert (await e.use_offer("A", offer)).status == "rejected"
+    assert (await ask(e, "A", "t_3")).offer_id is None                  # a fresh question offers nothing
+    assert not (await e.prepare_present("A", "butler", "ev_note", "", [])).ok   # withdrawn evidence cannot return
 
 
-def test_present_needs_found_evidence():
+async def test_present_needs_found_evidence():
     e = FakeEngine()
-    prep = e.prepare_present("A", "butler", "ev_note", "", [])
+    prep = await e.prepare_present("A", "butler", "ev_note", "", [])
     assert not prep.ok and prep.error
-    assert "ev_note" not in {x.id for x in e.team_findings("B")}  # autocomplete lists only the team's own
+    assert "ev_note" not in {x.id for x in await e.team_findings("B")}  # autocomplete lists only the team's own
 
 
-def test_double_click_acts_once():
+async def test_double_click_acts_once():
     e = FakeEngine()
-    stage_team_a(e)
-    offer = ask(e, "A", "t_1").offer_id
-    assert e.use_offer("A", offer).status == "used"
-    assert e.use_offer("A", offer).status == "already_used"
+    await stage_team_a(e)
+    offer = (await ask(e, "A", "t_1")).offer_id
+    assert (await e.use_offer("A", offer)).status == "used"
+    assert (await e.use_offer("A", offer)).status == "already_used"
 
 
-def test_retry_same_turn_same_trace():
+async def test_concurrent_double_click_acts_once():
     e = FakeEngine()
-    first = ask(e, "A", "t_1")
-    again = ask(e, "A", "t_1")
+    await stage_team_a(e)
+    offer = (await ask(e, "A", "t_1")).offer_id
+    results = await asyncio.gather(*(e.use_offer("A", offer) for _ in range(5)))
+    assert sorted(r.status for r in results).count("used") == 1
+
+
+async def test_retry_same_turn_same_trace():
+    e = FakeEngine()
+    first = await ask(e, "A", "t_1")
+    again = await ask(e, "A", "t_1")
     assert first == again and len(e.traces) == 1
 
 
-def test_search_closed_and_open_rooms():
+async def test_search_closed_and_open_rooms():
     e = FakeEngine()
-    assert not e.search_room("A", "wine_cellar").ok
-    r = e.search_room("A", "greenhouse")
+    assert not (await e.search_room("A", "wine_cellar")).ok
+    r = await e.search_room("A", "greenhouse")
     assert r.ok and "gardener's note" in found_text(r.found)
-    assert found_text(e.search_room("A", "greenhouse").found) == "Nothing new here."   # already held
+    assert found_text((await e.search_room("A", "greenhouse")).found) == "Nothing new here."   # already held
 
 
-def test_accusation_flow():
+async def test_accusation_flow():
     e = FakeEngine()
-    assert e.accuse("A", "cook", "fire_poker", "map_room").status == "eliminated"
-    assert e.is_eliminated("A")
-    assert e.accuse("A", "butler", "fire_poker", "map_room").status == "already_accused"
-    assert e.accuse("B", "nobody", "fire_poker", "map_room").status == "invalid"
-    assert e.accuse("B", "butler", "fire_poker", "map_room").status == "solved"
+    assert (await e.accuse("A", "cook", "fire_poker", "map_room")).status == "eliminated"
+    assert await e.is_eliminated("A")
+    assert (await e.accuse("A", "butler", "fire_poker", "map_room")).status == "already_accused"
+    assert (await e.accuse("B", "nobody", "fire_poker", "map_room")).status == "invalid"
+    assert (await e.accuse("B", "butler", "fire_poker", "map_room")).status == "solved"
 
 
 # ---- hosted invoke -------------------------------------------------------------------------------
-import asyncio
-
 import httpx
 
 from bot import invoke as ae

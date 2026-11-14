@@ -1,8 +1,6 @@
 """Persistent offer buttons. One DynamicItem matches every offer:<id>, including after a restart."""
 from __future__ import annotations
 
-import asyncio
-
 import discord
 
 from bot.config import Settings
@@ -41,7 +39,7 @@ class OfferButton(discord.ui.DynamicItem[discord.ui.Button], template=r"offer:(?
             await interaction.response.send_message(str(r), ephemeral=True)
             return
         await interaction.response.defer(thinking=True)
-        result = await asyncio.to_thread(self.engine.use_offer, caller.team_id, self.offer_id)
+        result = await self.engine.use_offer(caller.team_id, self.offer_id)
         if result.status == "forbidden":
             await interaction.followup.send(result.message, ephemeral=True)
             return

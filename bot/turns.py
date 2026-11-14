@@ -22,7 +22,7 @@ log = logging.getLogger("bot.turns")
 async def generate(cfg: Settings, engine: Engine, prepared) -> None:
     """Run the agent for one prepared turn. The trace is the output, never the return value."""
     if cfg.engine_mode != "hosted":
-        await asyncio.to_thread(engine.generate, prepared)         # fake / local
+        await engine.generate(prepared)         # fake / local
         return
     try:
         await ae.invoke(cfg, prepared)
@@ -46,33 +46,33 @@ async def run_turn(interaction: discord.Interaction, cfg: Settings, engine: Engi
     if suspect_id not in names:
         await interaction.followup.send("No such suspect.", ephemeral=True)
         return
-    if await asyncio.to_thread(engine.is_eliminated, caller.team_id):
+    if await engine.is_eliminated(caller.team_id):
         await interaction.followup.send("Your team has been knocked out and can no longer question suspects.",
                                         ephemeral=True)
         return
 
     turn_id = f"t_{interaction.id}"                              # rule 16
     async with _lock(caller.team_id, suspect_id):               # one turn at a time per (team, suspect)
-        recent = await asyncio.to_thread(engine.recent_turns, caller.team_id, suspect_id)
+        recent = await engine.recent_turns(caller.team_id, suspect_id)
         if command == "present":                                 # correction runs before the agent (rule 11)
-            prep = await asyncio.to_thread(engine.prepare_present, caller.team_id, suspect_id,
+            prep = await engine.prepare_present(caller.team_id, suspect_id,
                                            evidence_id or "", question, recent)
         else:
-            prep = await asyncio.to_thread(engine.prepare_interrogate, caller.team_id, suspect_id,
+            prep = await engine.prepare_interrogate(caller.team_id, suspect_id,
                                            question, recent)
         if not prep.ok:                                          # do not invoke the agent
             await interaction.followup.send(prep.error or "That can't be done right now.", ephemeral=True)
             return
 
-        prepared = await asyncio.to_thread(engine.begin_turn, caller.team_id, suspect_id, turn_id, command,
+        prepared = await engine.begin_turn(caller.team_id, suspect_id, turn_id, command,
                                            question, prep)
-        trace = await asyncio.to_thread(engine.get_trace, caller.team_id, turn_id)
+        trace = await engine.get_trace(caller.team_id, turn_id)
         if trace is None or trace.status != "complete":
             try:
                 await generate(cfg, engine, prepared)
             except ae.InvokeError as e:
                 log.warning("turn %s failed: %s", turn_id, e)      # the trace decides what happens next
-            trace = await asyncio.to_thread(engine.get_trace, caller.team_id, turn_id)
+            trace = await engine.get_trace(caller.team_id, turn_id)
 
     if trace is None or trace.status != "complete":
         log.warning("turn %s not complete", turn_id)
@@ -102,10 +102,10 @@ async def attach_clip(cfg, engine, caller, trace, suspect_id, message) -> None:
     if not (cfg.elevenlabs_api_key and voice_id and trace.decision):
         return
     try:
-        confidence, breaks = await asyncio.to_thread(engine.voice_inputs, caller.team_id, trace)
+        confidence, breaks = await engine.voice_inputs(caller.team_id, trace)
         settings = settings_for(trace.decision, confidence, breaks, cfg.voice_model)
         audio = await tts.speak(cfg, voice_id, trace.reply, trace.decision, settings)
         await message.edit(attachments=[discord.File(io.BytesIO(audio), filename="reply.mp3")])
-        await asyncio.to_thread(engine.record_voice, caller.team_id, trace.turn_id, settings.to_trace(voice_id))
+        await engine.record_voice(caller.team_id, trace.turn_id, settings.to_trace(voice_id))
     except Exception as e:                                       # noqa: BLE001 - voice must never break a turn
         log.warning("turn %s: no clip (%s)", trace.turn_id, e.__class__.__name__)

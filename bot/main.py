@@ -1,7 +1,6 @@
 """Discord entry point. Run: python -m bot.main"""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import discord
@@ -79,7 +78,7 @@ async def ac_findings(interaction, current: str):              # only evidence T
         team = caller_of(interaction).team_id
     except Refusal:
         return []
-    found = await asyncio.to_thread(engine.team_findings, team)
+    found = await engine.team_findings(team)
     return choices([(e.id, e.name) for e in found], current)
 
 
@@ -135,7 +134,7 @@ async def search(interaction: discord.Interaction, room: str) -> None:
     except Refusal as r:
         return await refuse(interaction, r)
     await interaction.response.defer(thinking=True)
-    result = await asyncio.to_thread(engine.search_room, caller.team_id, room)
+    result = await engine.search_room(caller.team_id, room)
     if not result.ok:
         return await interaction.followup.send(result.error or "You can't search there.", ephemeral=True)
     await interaction.followup.send(clip(found_text(result.found)))
@@ -148,7 +147,7 @@ async def notebook(interaction: discord.Interaction, query: str = "") -> None:
     except Refusal as r:
         return await refuse(interaction, r)
     await interaction.response.defer(ephemeral=True)
-    rows = await asyncio.to_thread(engine.notebook, caller.team_id, query)
+    rows = await engine.notebook(caller.team_id, query)
     await interaction.followup.send(clip("\n".join(f"- {r}" for r in rows)) if rows else "Nothing in your notebook yet.",
                                     ephemeral=True)
 
@@ -161,7 +160,7 @@ async def accuse(interaction: discord.Interaction, suspect: str, weapon: str, ro
     except Refusal as r:
         return await refuse(interaction, r)
     await interaction.response.defer(ephemeral=True)
-    result = await asyncio.to_thread(engine.accuse, caller.team_id, suspect, weapon, room)
+    result = await engine.accuse(caller.team_id, suspect, weapon, room)
     if result.status in ("solved", "eliminated"):
         await post_to(cfg.case_room_channel_id, result.message)   # never says which part was wrong
     await interaction.followup.send(result.message, ephemeral=True)
@@ -177,7 +176,7 @@ async def event(interaction: discord.Interaction, event_id: str) -> None:
         return await refuse(interaction, r)
     await interaction.response.defer(ephemeral=True)
     try:
-        result = await asyncio.to_thread(engine.trigger_event, event_id)
+        result = await engine.trigger_event(event_id)
     except KeyError:
         return await interaction.followup.send("Unknown event.", ephemeral=True)
     for team in result.notify_teams:                          # only teams whose world held the memory
@@ -196,7 +195,7 @@ async def discover(interaction: discord.Interaction, team: str, evidence: str) -
         return await interaction.response.send_message(f"Team must be one of {sorted(cfg.team_roles)}.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
     try:
-        found = await asyncio.to_thread(engine.discover, team, evidence)
+        found = await engine.discover(team, evidence)
     except KeyError:
         return await interaction.followup.send("Unknown evidence.", ephemeral=True)
     await interaction.followup.send(f"Team {team}: {found.evidence.name} ({'new' if found.new else 'already held'}).")
@@ -212,7 +211,7 @@ async def round_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
     round_no += 1
     for team in sorted(cfg.team_roles):                       # once per world
-        await asyncio.to_thread(engine.run_round, team, round_no)
+        await engine.run_round(team, round_no)
     await post_to(cfg.case_room_channel_id, f"Round {round_no} begins.")   # never rumour text (rule 18)
     await interaction.followup.send(f"Round {round_no} run.")
 

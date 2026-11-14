@@ -192,9 +192,10 @@ the team, not whoever ran the command. Every click goes through `use_offer` and 
 | Voice | `store.fetch` + `store.count_superseded` for inputs; `traces.set_voice(scope, turn_id, voice)` after the clip | 1 |
 | Expiry | `store.watch_expiries(on_expired)`; the bot writes the wording, no memory text | 1 |
 
-**Open:** the engine functions are synchronous and need a PyMongo `MongoClient` store, but `MemoryStore` and `TraceStore`
-are async (`AsyncMongoClient`). One of them must change, or the engine needs an async/sync adapter. Until then the bot
-runs against `bot/fake_engine.py` (`ENGINE_MODE=fake`).
+**Decided (Person 3 and Person 4): async.** The engine functions are async, taking the async `MemoryStore` and
+`TraceStore`. The bot `await`s each call directly, with no threads. Only `case_info()` is synchronous: the adapter loads
+the case once at startup (`load_case`). Until the real engine lands, the bot runs against `bot/fake_engine.py`
+(`ENGINE_MODE=fake`), which has the same async interface.
 
 ### Invoke (hosted mode)
 
