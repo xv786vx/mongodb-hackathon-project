@@ -1,0 +1,35 @@
+{
+  "_id": "case_test",
+  "title": "Test case for the memory layer (not the real case; Person 3 owns cases/)",
+  "truth": { "killer": "butler", "weapon": "fire_poker", "room": "boathouse" },
+  "suspects": [
+    { "id": "butler", "persona": "Stiff, formal, protective of the household.", "is_killer": true, "crack_threshold": 2 },
+    { "id": "cook", "persona": "Warm, chatty, notices everything in the kitchen.", "is_killer": false, "crack_threshold": 99 }
+  ],
+  "rooms": [
+    { "id": "boathouse", "open": true },
+    { "id": "greenhouse", "open": true },
+    { "id": "cellar", "open": false }
+  ],
+  "weapons": ["fire_poker", "letter_opener"],
+  "evidence": [
+    { "id": "ev_note", "room": "greenhouse", "unlocks": ["search_cellar"],
+      "text": "The gardener's note: he saw the butler go into the cellar after midnight." },
+    { "id": "ev_glove", "room": "cellar", "text": "A bloody glove" }
+  ],
+  "actions": [
+    { "id": "search_cellar", "label": "Search the cellar", "reveals": "ev_glove" }
+  ],
+  "events": [
+    { "id": "gardener_recants", "ref": "ev_note", "replacement": "The gardener now says he saw no one that night." }
+  ],
+  "seed_memories": [
+    { "id": "s_butler_alibi", "kind": "cover_story", "known_by": ["suspect:butler"],
+      "text": "I was polishing the silver in the pantry from eleven until two. I never left the pantry." },
+    { "id": "s_cook_footsteps", "kind": "witnessed", "known_by": ["suspect:cook"],
+      "text": "Just after midnight I heard heavy footsteps going down the cellar stairs." },
+    { "id": "s_cook_silver", "kind": "witnessed", "known_by": ["suspect:cook"],
+      "text": "When I passed the pantry at half past twelve the silver was laid out but nobody was there." }
+  ],
+  "status": "active"
+}
