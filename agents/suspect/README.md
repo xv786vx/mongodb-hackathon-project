@@ -96,9 +96,13 @@ agentengine deploy --build
 
 Keep the existing Cluster0 link; do not accept defaults that create a cluster. The runtime needs
 `MONGODB_URI`, `DB_NAME=mystery`, `EMBEDDING_MODEL=voyage-4-lite`, `EMBEDDING_DIMS=1024`,
-`EMBEDDING_API_KEY`, `LLM_PROVIDER=openai`, `LLM_MODEL` and a real `LLM_API_KEY`.
+`EMBEDDING_API_KEY`, `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-3.5-flash-lite` and a Google
+AI Studio API key in `LLM_API_KEY`. OpenAI remains supported with `LLM_PROVIDER=openai`
+and the corresponding OpenAI model/key. Both hosted and local modes use the same provider factory.
+The agent's local `.env` is `agents/suspect/.env`; the bot's root `.env` must select the same
+provider/model/key when using local fallback. Local files do not update deployed workspace secrets.
 Use `agentengine secret set NAME --workspace-scope` or a private stdin import restricted to those names.
-The manifest permits OpenAI and Voyage egress and lets `invoke_llm` run in the tool sandbox.
+The manifest permits Gemini, OpenAI and Voyage egress and lets `invoke_llm` run in the tool sandbox.
 The Python SDK/model-adapter pins are tested and predate the platform's seven-day package cutoff.
 
 ## Verification
@@ -110,6 +114,8 @@ python setup_db.py --db mystery_test
 python -m pytest -m atlas tests/test_isolation.py tests/test_traces.py
 python -m suspect_agent.smoke --mode local --team A
 python -m suspect_agent.smoke --mode hosted --team A
+# Explicitly use the agent's own local configuration:
+python -m suspect_agent.smoke --env-file agents/suspect/.env --mode local --team A
 ```
 
 The smoke commands print only trace/memory/offer IDs, and require both a complete trace and a retrieved
