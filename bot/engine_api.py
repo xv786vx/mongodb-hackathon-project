@@ -1,6 +1,8 @@
-"""The calls the bot makes into the game engine (placeholders until CONTRACTS.md is agreed).
+"""What the bot needs from the game engine.
 
-mystery_core is synchronous, so the bot always calls these through asyncio.to_thread.
+Shapes follow person 3's entry points (mystery_core.engine) and person 1's traces. Every method
+is synchronous; the bot calls them through asyncio.to_thread. The real adapter (not written yet)
+maps each method onto the engine functions listed beside it. FakeEngine implements all of it.
 """
 from __future__ import annotations
 
@@ -9,38 +11,119 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
-class Prepared:
+class Suspect:
+    id: str
+    name: str
+    role: str = ""
+
+
+@dataclass(frozen=True)
+class Named:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CaseInfo:
+    title: str
+    intro: str
+    suspects: tuple[Suspect, ...]
+    open_rooms: tuple[Named, ...]
+    weapons: tuple[Named, ...]
+    events: tuple[Named, ...]
+    evidence: tuple[Named, ...]          # host-only (/discover). Players only ever get team_findings.
+
+
+@dataclass(frozen=True)
+class Evidence:
+    id: str
+    name: str
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class Found:
+    evidence: Evidence
+    new: bool = True                     # False: the team already had it
+    withdrawn: bool = False              # True: a world event retracted it
+
+
+@dataclass(frozen=True)
+class TurnPrep:                          # turn.prepare_interrogate / prepare_present
+    ok: bool
+    error: str = ""
+    message: str = ""                    # the invoke message
+    prompt_version: str = ""
+    fresh: tuple[str, ...] = ()          # memory ids written for this turn; go on the trace's `written`
+
+
+@dataclass(frozen=True)
+class Prepared:                          # what the bot hands to the agent runner
     turn_id: str
     case_id: str
     team_id: str
     suspect_id: str
     command: str
     message: str = ""
+    prompt_version: str = ""
+    fresh: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class Trace:
+class Trace:                             # person 1's Trace, reduced to what the bot reads
     turn_id: str
-    status: str                      # pending | complete | rejected
+    status: str                          # pending | complete | rejected
     suspect_id: str
     reply: str = ""
     offer_id: str | None = None
     offer_label: str | None = None
-    decision: str = ""               # kept for the host and replay. Never shown to players.
-    extra: dict = field(default_factory=dict)
+    decision: str = ""                   # for the host and replay. Never shown to players.
 
 
 @dataclass(frozen=True)
-class OfferResult:
-    status: str                      # used | lead_gone | already_used | wrong_team
-    text: str = ""
+class OfferResult:                       # actions.use_offer -> ClickResult
+    status: str                          # used | rejected | already_used | forbidden | not_found
+    message: str = ""
+    found: tuple[Found, ...] = ()
+
+
+@dataclass(frozen=True)
+class EventResult:                       # events.trigger_event
+    notify_teams: tuple[str, ...]
+    notice: str
+
+
+@dataclass(frozen=True)
+class SearchResult:                      # actions.search_room
+    ok: bool
+    room: str = ""
+    found: tuple[Found, ...] = ()
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class AccusationResult:                  # game.accuse
+    status: str                          # solved | eliminated | already_accused | invalid
+    message: str = ""                    # safe to post publicly
 
 
 class Engine(Protocol):
-    def suspects(self, case_id: str) -> list[tuple[str, str]]: ...       # (id, display name)
-    def begin_turn(self, case_id: str, team_id: str, suspect_id: str, turn_id: str,
-                   command: str, question: str) -> Prepared: ...
-    def generate(self, prepared: Prepared) -> None: ...                  # writes the trace
-    def get_trace(self, turn_id: str) -> Trace | None: ...
-    def use_offer(self, case_id: str, team_id: str, offer_id: str) -> OfferResult: ...
-    def trigger_event(self, case_id: str, event_id: str) -> list[str]: ...   # teams to notify
+    def case_info(self) -> CaseInfo: ...                                      # load_case, once
+    def team_findings(self, team_id: str) -> list[Evidence]: ...              # actions.team_findings
+    def recent_turns(self, team_id: str, suspect_id: str) -> list[dict]: ...  # traces: {input, reply}
+    def prepare_interrogate(self, team_id: str, suspect_id: str, question: str,
+                            recent: list[dict]) -> TurnPrep: ...
+    def prepare_present(self, team_id: str, suspect_id: str, evidence_id: str, question: str,
+                        recent: list[dict]) -> TurnPrep: ...                  # always llm=None
+    def begin_turn(self, team_id: str, suspect_id: str, turn_id: str, command: str, question: str,
+                   prep: TurnPrep) -> Prepared: ...                           # traces.begin_turn
+    def generate(self, prepared: Prepared) -> None: ...                       # local runner or invoke.py
+    def get_trace(self, team_id: str, turn_id: str) -> Trace | None: ...      # traces.get_trace
+    def use_offer(self, team_id: str, offer_id: str) -> OfferResult: ...
+    def trigger_event(self, event_id: str) -> EventResult: ...
+    def search_room(self, team_id: str, room_id: str) -> SearchResult: ...
+    def discover(self, team_id: str, evidence_id: str) -> Found: ...
+    def notebook(self, team_id: str, query: str) -> list[str]: ...
+    def accuse(self, team_id: str, who: str, weapon: str, room: str) -> AccusationResult: ...
+    def run_round(self, team_id: str, round_no: int) -> int: ...              # post nothing about content
+    def is_eliminated(self, team_id: str) -> bool: ...

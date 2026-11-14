@@ -8,6 +8,7 @@ import discord
 from bot.config import Settings
 from bot.engine_api import Engine
 from bot.identity import Refusal, resolve_team, role_ids_of
+from bot.render import clip, found_text
 
 PREFIX = "offer:"
 
@@ -40,9 +41,11 @@ class OfferButton(discord.ui.DynamicItem[discord.ui.Button], template=r"offer:(?
             await interaction.response.send_message(str(r), ephemeral=True)
             return
         await interaction.response.defer(thinking=True)
-        result = await asyncio.to_thread(self.engine.use_offer, self.cfg.case_id, caller.team_id,
-                                         self.offer_id)
-        if result.status == "wrong_team":
-            await interaction.followup.send("That isn't your team's lead.", ephemeral=True)
-        else:
-            await interaction.followup.send(result.text or result.status)
+        result = await asyncio.to_thread(self.engine.use_offer, caller.team_id, self.offer_id)
+        if result.status == "forbidden":
+            await interaction.followup.send(result.message, ephemeral=True)
+            return
+        text = result.message
+        if result.status == "used" and result.found:
+            text += "\n" + found_text(result.found)
+        await interaction.followup.send(clip(text))

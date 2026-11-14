@@ -31,6 +31,12 @@ class Settings:
     host_role_id: int | None = None
     host_channel_id: int | None = None
     case_room_channel_id: int | None = None
+    ae_project_id: str = ""
+    ae_workspace_id: str = ""
+    ae_client_id: str = ""           # service account credentials. Live in the bot's .env only (rule 9).
+    ae_client_secret: str = ""
+    ae_api_key: str = ""             # optional static bearer token, used only if no client credentials are set
+    ae_base_url: str = "https://agentengine.mongodb.com"
 
     @property
     def team_for_role(self) -> dict[int, str]:
@@ -49,6 +55,11 @@ class Settings:
             gaps.append("TEAM_CHANNELS")
         if self.host_role_id is None:
             gaps.append("HOST_ROLE_ID")
+        if self.engine_mode == "hosted":
+            gaps += [n for n, v in (("AGENT_ENGINE_PROJECT_ID", self.ae_project_id),
+                                    ("AGENT_ENGINE_WORKSPACE_ID", self.ae_workspace_id)) if not v]
+            if not (self.ae_client_id and self.ae_client_secret) and not self.ae_api_key:
+                gaps.append("AGENT_ENGINE_CLIENT_ID + AGENT_ENGINE_CLIENT_SECRET")
         if self.engine_mode not in ("fake", "local", "hosted"):
             gaps.append("ENGINE_MODE (fake|local|hosted)")
         return gaps
@@ -67,4 +78,9 @@ def load() -> Settings:
         host_role_id=_int(e("HOST_ROLE_ID")),
         host_channel_id=_int(e("HOST_CHANNEL_ID")),
         case_room_channel_id=_int(e("CASE_ROOM_CHANNEL_ID")),
+        ae_project_id=e("AGENT_ENGINE_PROJECT_ID", "").strip(),
+        ae_workspace_id=e("AGENT_ENGINE_WORKSPACE_ID", "").strip(),
+        ae_client_id=e("AGENT_ENGINE_CLIENT_ID", "").strip(),
+        ae_client_secret=e("AGENT_ENGINE_CLIENT_SECRET", "").strip(),
+        ae_api_key=e("AGENT_ENGINE_API_KEY", "").strip(),
     )
