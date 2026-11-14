@@ -6,6 +6,7 @@ import discord
 from bot.config import Settings
 from bot.engine_api import Engine
 from bot.identity import Refusal, resolve_team, role_ids_of
+from bot.real_engine import EngineNotReady
 from bot.render import clip, found_text
 
 PREFIX = "offer:"
@@ -39,7 +40,11 @@ class OfferButton(discord.ui.DynamicItem[discord.ui.Button], template=r"offer:(?
             await interaction.response.send_message(str(r), ephemeral=True)
             return
         await interaction.response.defer(thinking=True)
-        result = await self.engine.use_offer(caller.team_id, self.offer_id)
+        try:
+            result = await self.engine.use_offer(caller.team_id, self.offer_id)
+        except EngineNotReady as e:
+            await interaction.followup.send(f"That part of the game isn't connected yet ({e}).", ephemeral=True)
+            return
         if result.status == "forbidden":
             await interaction.followup.send(result.message, ephemeral=True)
             return

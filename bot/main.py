@@ -1,6 +1,7 @@
 """Discord entry point. Run: python -m bot.main"""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -8,6 +9,8 @@ from discord import app_commands
 
 from bot import config
 from bot.fake_engine import FakeEngine
+from bot.notices import make_on_expired
+from bot.real_engine import EngineNotReady, RealEngine
 from bot.identity import Caller, Refusal, require_host, resolve_team, role_ids_of
 from bot.render import clip, found_text
 from bot.turns import run_turn
@@ -17,13 +20,8 @@ log = logging.getLogger("bot")
 cfg = config.load()
 
 
-def make_engine():
-    if cfg.engine_mode == "fake":
-        return FakeEngine()
-    raise SystemExit(f"ENGINE_MODE={cfg.engine_mode} is not wired yet. Use ENGINE_MODE=fake.")
-
-
-engine = make_engine()
+# fake: in-memory stand-in. local/hosted: the real engine, opened against Atlas in setup_hook.
+engine = FakeEngine() if cfg.engine_mode == "fake" else None
 OfferButton.cfg, OfferButton.engine = cfg, engine
 round_no = 0          # TODO: ask person 3 where the round number should live; run_round needs it
 
@@ -34,6 +32,12 @@ class Bot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self) -> None:
+        global engine
+        if engine is None:
+            engine = await RealEngine.open(cfg)
+            OfferButton.engine = engine
+            on_expired = make_on_expired(cfg, post_to, cfg.case_id)
+            asyncio.create_task(engine.watch_expiries(on_expired))   # "a rumour has faded", per team
         self.add_dynamic_items(OfferButton)                   # must run before connecting
         guild = discord.Object(id=cfg.guild_id)
         self.tree.copy_global_to(guild=guild)                 # guild sync: changes show up immediately
@@ -41,6 +45,20 @@ class Bot(discord.Client):
 
 
 bot = Bot()
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    original = getattr(error, "original", error)
+    if isinstance(original, EngineNotReady):
+        text = f"That part of the game isn't connected yet ({original})."
+    else:
+        log.exception("command failed", exc_info=original)
+        text = "Something went wrong. Try again."
+    if interaction.response.is_done():
+        await interaction.followup.send(text, ephemeral=True)
+    else:
+        await interaction.response.send_message(text, ephemeral=True)
 
 
 # ---- helpers -----------------------------------------------------------------------------------

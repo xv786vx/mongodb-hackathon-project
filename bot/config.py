@@ -67,6 +67,8 @@ class Settings:
             gaps.append("TEAM_CHANNELS")
         if self.host_role_id is None:
             gaps.append("HOST_ROLE_ID")
+        if self.engine_mode in ("local", "hosted"):
+            gaps += [n for n in ("MONGODB_URI", "DB_NAME") if not os.environ.get(n)]
         if self.engine_mode == "hosted":
             gaps += [n for n, v in (("AGENT_ENGINE_PROJECT_ID", self.ae_project_id),
                                     ("AGENT_ENGINE_WORKSPACE_ID", self.ae_workspace_id)) if not v]
