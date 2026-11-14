@@ -1,0 +1,19 @@
+# Owned by Person 2 (Agent Engine). Person 1 created this minimal version so that
+# `pip install -e agents/suspect` works for mystery_core. Extend it freely; keep the
+# mystery_core dependencies below.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "suspect-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pymongo>=4.10",
+    "pydantic>=2.11",
+    "voyageai>=0.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
