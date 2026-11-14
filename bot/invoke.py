@@ -87,6 +87,14 @@ def invoke_url(cfg: Settings) -> str:
             f"/workspaces/{cfg.ae_workspace_id}/invoke")
 
 
+def _error_code(r: httpx.Response) -> str:
+    try:
+        code = r.json().get("code", "")
+    except Exception:                                           # noqa: BLE001 - not JSON
+        return ""
+    return code if isinstance(code, str) and code.replace("_", "").isalnum() and len(code) <= 64 else ""
+
+
 _tokens: dict[int, TokenProvider] = {}
 
 
@@ -122,6 +130,7 @@ async def invoke(cfg: Settings, p: Prepared, *, transport: httpx.AsyncBaseTransp
     if r.status_code in (502, 503, 504):
         raise InvokeError(f"agent engine unavailable ({r.status_code})", retryable=True)
     if r.status_code >= 400:
-        # Log the status only. Never log headers or bodies: they can carry the token or memory text.
-        raise InvokeError(f"invoke failed ({r.status_code})", retryable=False)
+        # Status plus the platform's error code (e.g. AGENT_NOT_DEPLOYED). Never the body or headers:
+        # they can carry the token or memory text.
+        raise InvokeError(f"invoke failed ({r.status_code} {_error_code(r)})".rstrip(), retryable=False)
     log.info("invoked turn %s (%s)", p.turn_id, r.status_code)

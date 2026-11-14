@@ -204,3 +204,9 @@ def test_token_rejection_is_an_error_without_leaking_the_secret():
     with pytest.raises(ae.InvokeError) as e:
         asyncio.run(ae.invoke(CREDS, PREP, transport=httpx.MockTransport(lambda r: httpx.Response(401))))
     assert "csecret" not in str(e.value)
+
+
+def test_invoke_error_shows_platform_code_only():
+    with pytest.raises(ae.InvokeError) as e:
+        run_invoke(lambda r: httpx.Response(400, json={"error": "secret detail", "code": "AGENT_NOT_DEPLOYED"}))
+    assert "AGENT_NOT_DEPLOYED" in str(e.value) and "secret detail" not in str(e.value)
