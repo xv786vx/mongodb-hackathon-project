@@ -34,6 +34,14 @@ async def generate(cfg: Settings, engine: Engine, prepared) -> None:
 _locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
+def default_question(engine: Engine, command: str, question: str, evidence_id: str | None) -> str:
+    """/present's question is optional, but the agent's memory search needs a non-empty input."""
+    if question.strip() or command != "present":
+        return question
+    names = {e.id: e.name for e in engine.case_info().evidence}
+    return f"What can you tell us about {names.get(evidence_id or '', 'this evidence')}?"
+
+
 def _lock(team_id: str, suspect_id: str) -> asyncio.Lock:
     return _locks.setdefault((team_id, suspect_id), asyncio.Lock())
 
@@ -51,6 +59,7 @@ async def run_turn(interaction: discord.Interaction, cfg: Settings, engine: Engi
                                         ephemeral=True)
         return
 
+    question = default_question(engine, command, question, evidence_id)
     turn_id = f"t_{interaction.id}"                              # rule 16
     async with _lock(caller.team_id, suspect_id):               # one turn at a time per (team, suspect)
         recent = await engine.recent_turns(caller.team_id, suspect_id)

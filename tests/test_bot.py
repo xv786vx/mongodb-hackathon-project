@@ -210,3 +210,12 @@ def test_invoke_error_shows_platform_code_only():
     with pytest.raises(ae.InvokeError) as e:
         run_invoke(lambda r: httpx.Response(400, json={"error": "secret detail", "code": "AGENT_NOT_DEPLOYED"}))
     assert "AGENT_NOT_DEPLOYED" in str(e.value) and "secret detail" not in str(e.value)
+
+
+def test_present_without_a_question_gets_a_default_one():
+    from bot.turns import default_question
+    e = FakeEngine()
+    assert default_question(e, "present", "", "ev_note") == "What can you tell us about The gardener's note?"
+    assert default_question(e, "present", "  ", "ev_x") == "What can you tell us about this evidence?"
+    assert default_question(e, "present", "Explain this.", "ev_note") == "Explain this."
+    assert default_question(e, "interrogate", "hi", None) == "hi"
