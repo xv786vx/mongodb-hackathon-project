@@ -1,0 +1,10 @@
+# secrets
+.env
+agents/suspect/.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
