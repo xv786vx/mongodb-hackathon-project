@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+import os
 from typing import Any
 
 from bot.config import Settings as BotSettings
@@ -74,13 +75,17 @@ def _trace(t: Any) -> Trace:
 
 class RealEngine:
     def __init__(self, cfg: BotSettings, store, traces, case_doc: dict[str, Any], *, db=None,
-                 engine_case=None, modules: dict[str, Any] | None = None, runner=None) -> None:
+                 engine_case=None, modules: dict[str, Any] | None = None, runner=None, client=None) -> None:
         self.cfg = cfg
-        self.store, self.traces, self.db = store, traces, db
+        self.store, self.traces, self.db, self.client = store, traces, db, client
         self._info = case_info_from_doc(case_doc)
+        # Evidence text, only ever shown to the team that just revealed that item.
+        self._evidence = {e["id"]: Evidence(e["id"], e.get("name", e["id"]), e.get("text", ""))
+                          for e in case_doc.get("evidence", [])}
         self.case = engine_case                       # person 3's loaded case object, once available
-        self.m = modules or {}                        # person 3's engine modules, once available
+        self.m = modules or {}                        # engine modules, once available
         self.runner = runner                          # person 2's local runner module, once available
+        self._runtime = None
 
     # ---- construction ----------------------------------------------------------------------------
     @classmethod
@@ -98,8 +103,8 @@ class RealEngine:
         if not doc:
             raise SystemExit(f"Case {cfg.case_id!r} not found in database {settings.db_name!r}.")
 
-        modules = {n: _try_import(f"mystery_core.engine.{n}") for n in ("case", "turn", "actions", "events",
-                                                                          "game", "gossip")}
+        modules = {n: _try_import(f"mystery_core.engine.{n}") for n in ("case", "turn", "context", "actions",
+                                                                          "events", "game", "gossip")}
         modules = {n: m for n, m in modules.items() if m is not None}
         engine_case = None
         if "case" in modules:
@@ -107,14 +112,22 @@ class RealEngine:
         runner = _try_import("bot.local_runner")
         log.info("real engine: case %s, engine modules %s, local runner %s",
                  cfg.case_id, sorted(modules) or "none", "yes" if runner else "no")
-        return cls(cfg, store, TraceStore(db), doc, db=db, engine_case=engine_case, modules=modules, runner=runner)
+        return cls(cfg, store, TraceStore(db), doc, db=db, engine_case=engine_case, modules=modules, runner=runner,
+                   client=client)
 
     def _scope(self, team_id: str) -> Scope:
         return Scope(case_id=self.cfg.case_id, team_id=team_id)     # team always from the Discord role
 
     def _need(self, name: str):
+        """A game-rules module that also needs person 3's loaded case."""
         mod = self.m.get(name)
         if mod is None or self.case is None:
+            raise EngineNotReady(f"mystery_core.engine.{name}")
+        return mod
+
+    def _need_mod(self, name: str):
+        mod = self.m.get(name)
+        if mod is None:
             raise EngineNotReady(f"mystery_core.engine.{name}")
         return mod
 
@@ -122,12 +135,25 @@ class RealEngine:
     def case_info(self) -> CaseInfo:
         return self._info
 
+    def _turn_service(self):
+        turn = self.m.get("turn")
+        if turn is None or not hasattr(turn, "TurnService"):
+            raise EngineNotReady("mystery_core.engine.turn.TurnService")
+        return turn.TurnService(self.store, self.traces, model=os.environ.get("LLM_MODEL", ""))
+
     async def begin_turn(self, team_id, suspect_id, turn_id, command, question, prep: TurnPrep) -> Prepared:
+        """Create the pending trace, then let person 2's TurnService build the agent's prompt from it.
+
+        The prompt is rebuilt from the immutable trace input and freshly fetched, scoped memories; `prep.fresh`
+        (the /present evidence ids) crosses search-index lag this way.
+        """
         mode = self.cfg.engine_mode if self.cfg.engine_mode in ("hosted", "local") else None
-        await self.traces.begin_turn(self._scope(team_id), turn_id, suspect_viewer(suspect_id), command, question,
-                                     engine_mode=mode)
-        return Prepared(turn_id, self.cfg.case_id, team_id, suspect_id, command, prep.message,
-                        prep.prompt_version, prep.fresh)
+        scope = self._scope(team_id)
+        await self.traces.begin_turn(scope, turn_id, suspect_viewer(suspect_id), command, question, engine_mode=mode)
+        ctx = self._need_mod("context").TurnContext(scope, suspect_id, turn_id, command)
+        native = await self._turn_service().prepare(ctx, fresh_memory_ids=list(prep.fresh))
+        return Prepared(turn_id, self.cfg.case_id, team_id, suspect_id, command, native.message,
+                        prep.prompt_version, prep.fresh, native=native)
 
     async def get_trace(self, team_id, turn_id) -> Trace | None:
         t = await self.traces.get_trace(self._scope(team_id), turn_id)
@@ -159,10 +185,17 @@ class RealEngine:
 
     # ---- generation (person 2) ---------------------------------------------------------------------
     async def generate(self, prepared: Prepared) -> None:
-        """Local mode only; hosted mode is invoke.py, called from turns.generate."""
-        if self.runner is None:
+        """Local mode only; hosted mode is invoke.py, called from turns.generate. Both write the same trace."""
+        if self.runner is None or prepared.native is None:
             raise EngineNotReady("bot.local_runner")
-        await self.runner.run(prepared)
+        await self.runner.run(prepared.native, runtime=self._local_runtime())
+
+    def _local_runtime(self):
+        """Reuse the bot's own store, traces and connection instead of opening a second one."""
+        if self._runtime is None and self.client is not None:
+            from suspect_agent.runtime import Runtime
+            self._runtime = Runtime(self.store, self.traces, self._turn_service(), self.client)
+        return self._runtime
 
     # ---- waiting on person 3 -------------------------------------------------------------------------
     async def prepare_interrogate(self, team_id, suspect_id, question, recent) -> TurnPrep:
@@ -190,11 +223,19 @@ class RealEngine:
         found = await _maybe_await(actions.team_findings(self.store, self.case, self._scope(team_id)))
         return [_evidence(e) for e in found]
 
+    # person 2's use_offer statuses -> the bot's
+    _CLICK = {"performed": "used", "used": "already_used", "rejected": "rejected"}
+
     async def use_offer(self, team_id, offer_id) -> OfferResult:
-        actions = self._need("actions")
-        r = await _maybe_await(actions.use_offer(self.store, self.case, offer_id, team_id))
-        return OfferResult(r.status, getattr(r, "message", "") or "",
-                           tuple(_found(d) for d in (getattr(r, "found", None) or ())))
+        """Click: scope from the clicker's role. Consuming the offer and writing the finding commit together."""
+        actions = self._need_mod("actions")
+        try:
+            r = await actions.use_offer(self.store, self.traces, self._scope(team_id), offer_id)
+        except self._need_mod("context").TurnError:
+            # unknown offer, or another team's: indistinguishable on purpose
+            return OfferResult("not_found", "That lead no longer exists.")
+        found = tuple(Found(self._evidence[e]) for e in (getattr(r, "revealed", ()) or ()) if e in self._evidence)
+        return OfferResult(self._CLICK.get(r.status, r.status), getattr(r, "message", "") or "", found)
 
     async def trigger_event(self, event_id) -> EventResult:
         events = self._need("events")

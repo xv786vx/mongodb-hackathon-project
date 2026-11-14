@@ -8,7 +8,7 @@ functions listed beside it. FakeEngine implements all of it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,7 @@ class Prepared:                          # what the bot hands to the agent runne
     message: str = ""
     prompt_version: str = ""
     fresh: tuple[str, ...] = ()
+    native: Any = None                   # person 2's PreparedTurn (has .context), for the local runner
 
 
 @dataclass(frozen=True)
