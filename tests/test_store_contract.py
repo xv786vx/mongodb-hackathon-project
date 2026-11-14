@@ -96,3 +96,19 @@ def test_retrieve_pipeline_filters_in_both_stages():
         assert f["case_id"] == "c" and f["team_id"] == "A" and f["known_by"] == COOK
         assert f["status"] == "active" and f["expires_at"] == {"$gt": now}
     assert match["_id"] == {"$nin": ["m_x"]} and "_id" not in vs
+
+
+async def test_get_case_hides_truth_and_embeddings(store):
+    store.cases["case_test"]["seed_memories"][0]["embedding"] = [0.1] * 4
+    case = await store.get_case("case_test")
+    assert "truth" not in case
+    assert all("embedding" not in s for s in case["seed_memories"])
+    assert case["actions"][0]["label"] == "Search the cellar"
+    case["title"] = "mutated"  # callers get a copy
+    assert store.cases["case_test"]["title"] != "mutated"
+    assert await store.get_case("case_nope") is None
+
+
+async def test_get_truth_only_returns_truth(store):
+    assert await store.get_truth("case_test") == {"killer": "butler", "weapon": "candlestick", "room": "library"}
+    assert await store.get_truth("case_nope") is None

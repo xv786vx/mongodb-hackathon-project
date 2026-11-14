@@ -55,6 +55,13 @@ class MemoryStoreAPI(Protocol):
 
     async def count_superseded(self, scope: Scope, viewer: str, kind: str = "cover_story") -> int: ...
 
+    async def get_case(self, case_id: str) -> dict[str, Any] | None: ...
+
+    async def get_truth(self, case_id: str) -> dict[str, Any] | None: ...
+
+
+# Never leaves the database through get_case: truth (rule 5) and seed embeddings (large, useless to callers).
+CASE_HIDDEN_FIELDS = {"truth": 0, "seed_memories.embedding": 0}
 
 ExpiryCallback = Callable[[ExpiryNotice], Awaitable[None]]
 
@@ -318,6 +325,19 @@ class MemoryStore:
                 "status": "superseded",
             }
         )
+
+    # --- cases ---------------------------------------------------------------------
+
+    async def get_case(self, case_id: str) -> dict[str, Any] | None:
+        """The case document without `truth` and without seed embeddings. None if unknown.
+        Safe to cache per case_id; use this everywhere except engine/game.py."""
+        return await self._db[CASES].find_one({"_id": case_id}, CASE_HIDDEN_FIELDS)
+
+    async def get_truth(self, case_id: str) -> dict[str, Any] | None:
+        """{killer, weapon, room} or None. Only engine/game.py may call this, to check an accusation (rule 5).
+        Never put the result in a prompt, trace, log or message."""
+        doc = await self._db[CASES].find_one({"_id": case_id}, {"truth": 1})
+        return doc.get("truth") if doc else None
 
     # --- expiry notices (runs inside the bot process) -------------------------------
 

@@ -9,6 +9,7 @@ unlocks), with cosine similarity in Python instead of $vectorSearch. Not for pro
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -181,6 +182,21 @@ class FakeStore:
             for m in self.docs.values()
             if m.scope == scope and viewer in m.known_by and m.kind == kind and m.status == "superseded"
         )
+
+    # --- cases ---------------------------------------------------------------------
+
+    async def get_case(self, case_id: str) -> dict[str, Any] | None:
+        case = self.cases.get(case_id)
+        if case is None:
+            return None
+        out = copy.deepcopy({k: v for k, v in case.items() if k != "truth"})
+        for s in out.get("seed_memories", []):
+            s.pop("embedding", None)
+        return out
+
+    async def get_truth(self, case_id: str) -> dict[str, Any] | None:
+        case = self.cases.get(case_id)
+        return copy.deepcopy(case.get("truth")) if case else None
 
     # --- governance ---------------------------------------------------------------
 

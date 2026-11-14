@@ -36,6 +36,8 @@ await store.forget(scope, viewer=None) -> int
 await store.seed_world(case_id, team_id) -> int
 await store.count_superseded(scope, viewer, kind="cover_story") -> int   # crack gate (rule 13) + voice
 await store.watch_expiries(on_expired, worker_id="expiry_notices")       # runs forever; bot starts it as a task
+await store.get_case(case_id) -> dict | None     # case WITHOUT truth and seed embeddings; cacheable per case_id
+await store.get_truth(case_id) -> dict | None    # {killer, weapon, room}; engine/game.py ONLY (rule 5)
 ```
 
 Differences from ARCHITECTURE.md section 4, on purpose:
@@ -49,7 +51,7 @@ Guarantees:
 - Replacements never inherit `unlocks`. A superseded memory disappears from `retrieve`/`fetch` immediately.
 - Search index lag: don't write then retrieve. Use the memories `write` returns.
 
-Status: `retrieve`, `fetch`, `write`, `seed_world`, `count_superseded`, `watch_expiries` are live on Atlas. `supersede`, `supersede_by_ref`, `forget` work in `FakeStore`; Atlas versions land in Phase 2/3.
+Status: `retrieve`, `fetch`, `write`, `seed_world`, `count_superseded`, `watch_expiries`, `get_case`, `get_truth` are live on Atlas. `supersede`, `supersede_by_ref`, `forget` work in `FakeStore`; Atlas versions land in Phase 2/3.
 
 ### Traces (`TraceStoreAPI`; implemented by `TraceStore(db)` and `FakeTraceStore()`)
 
