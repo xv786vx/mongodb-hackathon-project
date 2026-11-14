@@ -4,6 +4,9 @@ agents/suspect/.env
 
 # python
 .venv/
+env
+venv
+/venv
 __pycache__/
 *.pyc
 *.egg-info/

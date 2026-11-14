@@ -239,4 +239,68 @@ Turn flow for the bot: `traces.begin_turn` → for `/present` only, `turn.prepar
 
 ## Discord (Person 4)
 
-_TODO: slash command list, button `custom_id` format._
+Code: `bot/` (Person 4). Identity, posting and voice live here; no game rules.
+
+### Identity
+
+`team_id` comes from the member's Discord **role** (`TEAM_ROLES`). Exactly one team role is required; zero or two is refused.
+Replies must land in that team's private channel (`TEAM_CHANNELS`), otherwise the command is refused. `case_id` is `CASE_ID`.
+Suspect, room, weapon, evidence and event IDs are validated against the case. Team is never a player argument.
+The host is whoever holds `HOST_ROLE_ID`. Refusals are ephemeral.
+
+### Slash commands
+
+| Command | Who | Arguments | Output goes to |
+|---|---|---|---|
+| `/interrogate` | team | `suspect`, `question` | team channel |
+| `/present` | team | `evidence`, `suspect`, `question` (optional) | team channel |
+| `/search` | team | `room` (open rooms only) | team channel |
+| `/notebook` | team | `query` (optional) | ephemeral |
+| `/accuse` | team | `suspect`, `weapon`, `room` | `#case-room` (result only), ephemeral ack |
+| `/event` | host | `event_id` | each affected team's channel only |
+| `/discover` | host | `team`, `evidence` | ephemeral |
+| `/round` | host | none | `#case-room`: "Round N begins." No rumour text |
+| `/replay` | host | `trace_id`, `memory_id` | `#host` (not built yet) |
+| `/leaktest` | host | none | `#host` (not built yet) |
+
+`/present` evidence autocomplete lists only the team's own findings (`team_findings`), never the case's evidence list.
+
+### Button `custom_id`
+
+`offer:<offer_id>`, where `<offer_id>` is `ids.offer_id(team, action, memory_id)`, at most 94 characters. One persistent
+`DynamicItem` matches every such button, including those on messages from before a restart. The clicker's role decides
+the team, not whoever ran the command. Every click goes through `use_offer` and the result is rendered by the bot.
+
+### What the bot calls
+
+| Step | Call | Owner |
+|---|---|---|
+| Turn start | `traces.begin_turn(scope, "t_<interaction.id>", "suspect:<id>", command, input)` | 1 |
+| Turn message | `turn.prepare_interrogate(...)` / `turn.prepare_present(..., llm=None)`; if `ok` is false, post `error`, do not invoke | 3 |
+| Generate | hosted: `invoke` (below). local: `local_runner.run(prepared)`. Both write the same trace | 2 |
+| Read back | `traces.get_trace(scope, turn_id)`; post only `status == "complete"` | 1 |
+| Button click | `actions.use_offer(store, case, offer_id, clicker_team_id)` | 3 |
+| World event | `events.trigger_event(...)`: notify `notify_teams` with `event.notice` | 3 |
+| Voice | `store.fetch` + `store.count_superseded` for inputs; `traces.set_voice(scope, turn_id, voice)` after the clip | 1 |
+| Expiry | `store.watch_expiries(on_expired)`; the bot writes the wording, no memory text | 1 |
+
+**Decided (Person 3 and Person 4): async.** The engine functions are async, taking the async `MemoryStore` and
+`TraceStore`. The bot `await`s each call directly, with no threads. Only `case_info()` is synchronous: the adapter loads
+the case once at startup (`load_case`). Until the real engine lands, the bot runs against `bot/fake_engine.py`
+(`ENGINE_MODE=fake`), which has the same async interface.
+
+### Invoke (hosted mode)
+
+`POST {base}/api/v1/projects/{project}/workspaces/{workspace}/invoke`, body `{"message": prepared.message}`.
+Headers on every request: `Accept: application/vnd.agent-engine-2026-09-20-preview+json`,
+`X-Agent-Engine-Invoke-Timeout-Seconds: 60`, and the five `X-Mdb-Agent-Engine-Custom-` headers `Case-Id`, `Team-Id`,
+`Suspect-Id`, `Turn-Id`, `Command`. Auth: `POST {base}/api/v1/oauth/token` with the service account's client id and secret
+(HTTP Basic, `grant_type=client_credentials`) gives the bearer token. The token and secret live only in the bot's `.env`.
+A timeout is never retried blindly: the first execution may still be running, so the trace decides.
+
+### Voice
+
+`mystery_core/voice.py` maps decision, mean confidence and cover-story breaks to ElevenLabs settings (no API calls).
+`truth` and `lie` are identical. `crack` uses `eleven_multilingual_v2`; the rest use `VOICE_MODEL`
+(`eleven_flash_v2_5`). Voice IDs come from `case.suspects[].voice_id`; `VOICE_IDS` in `.env` is a local fallback.
+One clip per suspect reply, attached in memory to the team's message, text posted first.
