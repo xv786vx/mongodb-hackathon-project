@@ -141,9 +141,52 @@ case without `--replace`.
 
 _TODO: custom header names, `submit_reply` arguments and writes._
 
-## Case JSON (Person 3)
+## Case JSON and game engine (Person 3)
 
-_TODO. Memory layer needs: `_id` starting `case_`, `seed_memories[]` with `id`, `text`, `kind`, `known_by`, optional `unlocks`, `confidence`. See `tests/fixtures/mini_case.json`._
+### Case document
+
+**Atlas is the only copy of a case.** Cases live in `mystery.cases` (the demo case is `case_manor`). There is no case file in the repo; `tests/engine/fixtures/case_test.json` is a synthetic test case.
+
+Load with `case = await load_case(store, case_id)` (`mystery_core.engine.case`). It calls `store.get_case` and validates the document, so a broken case fails loudly at load time. `truth` is never part of a `Case`; only `engine/game.py` calls `store.get_truth`.
+
+| Field | Shape | Notes |
+|---|---|---|
+| `_id` | `"case_*"` | |
+| `title`, `victim`, `intro` | string | `intro` is safe to post publicly |
+| `truth` | `{killer, weapon, room}` (ids) | Read only through `get_truth`, by `engine/game.py` |
+| `suspects[]` | `{id, name, role, persona, is_killer, crack_threshold, voice_id, fallback_lies[], confession}` | Exactly one killer. Personas hold no case facts. `fallback_lies` are the killer's next lies when no LLM is used. `confession` (killer only) is what really happened; it is not a seed memory, so search never returns it, and the engine adds it to the turn message only once `crack` is allowed. `is_killer` stays visible in `get_case`: the engine needs it, and it only reaches the killer's own turn message |
+| `rooms[]` | `{id, name, open}` | Every closed room must be opened by an action |
+| `weapons[]` | `{id, name}` | Objects, so the bot can show names |
+| `evidence[]` | `{id, name, room, text, unlocks[], contradicts}` | `contradicts`: `{seed_id: replacement text or null}`. `{}` means it contradicts nothing. Omitted means the optional LLM checker decides |
+| `actions[]` | `{id, label, reveals[], opens}` | `label` is the button text |
+| `events[]` | `{id, label, ref, replacement, notice, also[]}` | `also: [{ref, replacement}]` lets one event change several memories. Only worlds that held `ref` get the `notice` |
+| `seed_memories[]` | `{id, text, known_by[], kind, confidence, unlocks[]}` | `kind` is required: `witnessed` or `cover_story`. `id` becomes `source.ref` in every world |
+| `gossip` | `{topics[], pairs_per_round}` | |
+
+Rooms avoid the famous board game's names (AGENTS.md rule 22): map room, pantry, scullery, greenhouse, cloakroom, wine cellar.
+
+### Engine entry points (`mystery_core.engine`)
+
+**All are `async def`**, because the store is async. They take the `store`, a loaded `case` and a `Scope`.
+
+| Caller | Call | Returns |
+|---|---|---|
+| Bot `/interrogate` | `turn.prepare_interrogate(store, case, scope, suspect_id, question, recent_turns)` | `TurnPrep` |
+| Bot `/present` | `turn.prepare_present(store, case, scope, suspect_id, evidence_id, question="", recent_turns=(), llm=None)` | `TurnPrep` |
+| Bot `/present` autocomplete | `actions.team_findings(store, case, scope)` | evidence the team holds |
+| Bot button click | `actions.use_offer(store, case, offer_id, clicker_team_id)` | `ClickResult`: `used`, `rejected`, `already_used`, `forbidden` or `not_found` |
+| Bot `/event` | `events.trigger_event(store, case, event_id)` | `EventResult(event, replaced, notify_teams)` |
+| Bot `/search`, `/discover`, `/notebook` | `actions.search_room`, `actions.discover`, `actions.notebook` | |
+| Bot `/accuse` | `game.accuse(store, case, scope, who, weapon, room)`, `game.is_eliminated(store, scope)` | `AccusationResult(status, message)` |
+| Bot `/round` | `gossip.run_round(store, case, scope, round_no)` per team | rumours written |
+| `search_memories` | `turn.format_memories(memories)` | memory ids and `[lead: …]` markers for the model |
+| `submit_reply` | `rules.check_decision(store, case, scope, suspect_id, decision)`, then `actions.validate_offer(store, case, scope, suspect_id, turn_id, trace.retrieved, proposed_action, supporting_memory_id)` | `None` or an error for the model; then `OfferDecision(offer, reason)`. Pass `reason` as `traces.complete_turn(..., offer_rejected_reason=...)` |
+
+- `TurnPrep` has `ok`, `message` (the invoke message), `allowed`, `prompt_version`, `fresh` (ids go in the trace's `written`) and `error` (if `ok` is `False`, post it and don't invoke).
+- `recent_turns` is the last few completed `Trace`s for this team and suspect.
+- `llm` is optional (`async (prompt) -> str`). The demo passes `None`, and the case's declared contradictions and `fallback_lies` are used.
+- Policy values come from `store.policy`, which the store loads from the `policies` collection.
+- The engine uses only store functions listed in "Store API" above. `GameStore` in `mystery_core/engine/ports.py` is the subset it calls; keep the two in step.
 
 ## Discord (Person 4)
 

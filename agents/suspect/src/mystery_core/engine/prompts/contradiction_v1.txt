@@ -1,0 +1,14 @@
+You check whether a piece of evidence contradicts something a character believes.
+
+Evidence shown to $name:
+$evidence
+
+$name's current beliefs, one per line, each with its id:
+$beliefs
+
+Does the evidence directly contradict one of these beliefs? Only answer yes if the evidence makes that belief clearly false, not merely suspicious.
+
+Reply with JSON only, no other text:
+{"contradicts": true, "memory_id": "<id of the contradicted belief>"}
+or
+{"contradicts": false, "memory_id": null}
